@@ -88,25 +88,25 @@ Returns the most semantically relevant notes about OTF, ranked by relevance — 
 
 ```
 Tool: summarize_person
-  person: "Habib"
+  person: "Daniel"
 ```
 
-Returns all notes where Habib was an attendee, formatted for Claude to summarize the key themes, decisions, and action items across meetings.
+Returns all notes where Daniel was an attendee, formatted for Claude to summarize the key themes, decisions, and action items across meetings.
 
 ---
 
 ### Searching by Person + Topic
 
 **You:**
-> What has Habib said about data integration specifically?
+> What has Daniel said about data integration specifically?
 
 ```
 Tool: search_by_person
-  person: "Habib"
+  person: "Daniel"
   query: "data integration"
 ```
 
-Finds notes where Habib was present AND the content is semantically related to data integration.
+Finds notes where Daniel was present AND the content is semantically related to data integration.
 
 ---
 
@@ -136,14 +136,14 @@ Tool: search_by_date_range
 ### Discovering Connections
 
 **You:**
-> What other meetings are related to what we discussed in the Cigna demo prep?
+> What other meetings are related to what we discussed in the Acme demo prep?
 
 ```
 Tool: find_connections
   note_id: "a1b2c3d4-..."
 ```
 
-Finds notes that are semantically similar to the Cigna demo prep note — might surface a meeting about SQL optimization with a different client, or an internal discussion about demo environments.
+Finds notes that are semantically similar to the Acme demo prep note — might surface a meeting about SQL optimization with a different client, or an internal discussion about demo environments.
 
 **You:**
 > What meetings touch on the topic of AI copilots?
@@ -190,11 +190,11 @@ If you have existing meeting notes in OneNote's dash-separated format, paste the
 > Import these meeting notes from OneNote:
 >
 > \-----------------------------------------------------------
-> Tehan, Daniel, Ahmed, Habib
+> Daniel
 > Tehan, Daniel at 3/10/26 10:00 AM
 > RE: Data DNA Weekly Sync
 > &nbsp;&nbsp;&nbsp;&nbsp;- Discussed MCP integration timeline
-> &nbsp;&nbsp;&nbsp;&nbsp;- Habib raised concerns about API rate limits
+> &nbsp;&nbsp;&nbsp;&nbsp;- Daniel raised concerns about API rate limits
 > &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Need to implement backoff strategy
 > &nbsp;&nbsp;&nbsp;&nbsp;- Action item: Daniel to prototype MCP server
 > \-----------------------------------------------------------
@@ -209,7 +209,7 @@ If you have existing meeting notes in OneNote's dash-separated format, paste the
 
 ```
 Tool: import_notes
-  text: "-----------------------------------------------------------\nTehan, Daniel, Ahmed, Habib\n..."
+  text: "-----------------------------------------------------------\nTehan, Daniel\n..."
 ```
 
 The parser extracts attendees, dates, subjects, and content from each block automatically.
@@ -228,14 +228,14 @@ Claude fetches chats via M365, groups messages by thread, then for each conversa
 **Step 1 — Find the right subject:**
 ```
 Tool: suggest_subject
-  participants: ["Daniel Tehan", "Habib Matar"]
+  participants: ["Daniel Tehan"]
   topic_hint: "Vantage migration"
 ```
 
 Returns existing notes ranked by participant overlap and topic relevance:
 ```
 Suggested subjects based on participant overlap and topic relevance:
-- Vantage DB Migration Planning (2026-03-10) — Daniel Tehan, Habib Matar, Sarah Jones
+- Vantage DB Migration Planning (2026-03-10) — Daniel Tehan
 - Data Platform Roadmap (2026-03-08) — Daniel Tehan, John Smith
 ```
 
@@ -244,10 +244,10 @@ Claude picks the matching subject (or creates a new one if nothing fits).
 **Step 2 — Store the chat:**
 ```
 Tool: add_chat_note
-  participants: ["Daniel Tehan", "Habib Matar"]
+  participants: ["Daniel Tehan"]
   date: "2026-03-14"
   subject: "Vantage DB Migration Planning"
-  content: "Daniel: We need to finish the schema migration by Friday\nHabib: I'll handle the index changes, can you do the stored procs?\nDaniel: Yes, I'll have them done by Thursday"
+  content: "Daniel: We need to finish the schema migration by Friday\nDaniel: I'll handle the index changes, can you do the stored procs?\nDaniel: Yes, I'll have them done by Thursday"
   chat_id: "19:abc123@thread.v2"
   message_count: 12
 ```
