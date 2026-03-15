@@ -49,20 +49,20 @@ All interaction happens through natural conversation with Claude. Below are exam
 ### Adding a Note
 
 **You:**
-> I just had a meeting with Habib Ahmed and Sarah Lee about the Data DNA pipeline. Here are my notes:
+> I just had a meeting with Alex Smith and Sarah Johnson about the Data DNA pipeline. Here are my notes:
 > - Reviewed OTF pipeline status — on track for March deadline
-> - Habib proposed new data integration approach using ClearScape
+> - Alex proposed new data integration approach using ClearScape
 > - Need to validate against Cigna's schema requirements
-> - Action item: Daniel to set up test environment by Friday
+> - Action item: John to set up test environment by Friday
 
 Claude looks up the calendar (via Microsoft 365 MCP if configured), fills in the date and attendees, then calls `add_note`:
 
 ```
 Tool: add_note
-  attendees: ["Habib Ahmed", "Sarah Lee", "Daniel Tehan"]
+  attendees: ["John Doe"]
   date: "2026-03-15T14:00:00"
   subject: "Data DNA Pipeline Review"
-  content: "- Reviewed OTF pipeline status — on track for March deadline\n- Habib proposed..."
+  content: "- Reviewed OTF pipeline status — on track for March deadline\n- proposed..."
 ```
 
 ---
