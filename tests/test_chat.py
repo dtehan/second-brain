@@ -10,7 +10,7 @@ os.environ["SECOND_BRAIN_TEST"] = "1"
 import second_brain.config as config
 config.CHROMA_PERSIST_DIR = os.path.join(_tmpdir, "chroma")
 
-from second_brain.notes.store import add_note, add_chat_note
+from second_brain.notes.store import add_note, add_chat_note, get_processed_ids
 from second_brain.search.semantic import search_notes, suggest_subject
 import second_brain.storage.vector_store as vs
 
@@ -105,3 +105,10 @@ def test_chat_notes_appear_in_search():
     )
     results = search_notes("kubernetes pods crashing")
     assert any("Kubernetes" in r["metadata"]["subject"] for r in results)
+
+
+def test_list_processed_ids_chat():
+    result = get_processed_ids("chat")
+    assert "chat" in result
+    # Should contain the chat_ids added in earlier tests
+    assert "k8s-thread-001" in result["chat"]

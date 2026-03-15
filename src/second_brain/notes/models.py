@@ -14,6 +14,9 @@ class MeetingNote:
     created_at: datetime = field(default_factory=datetime.now)
     chat_id: str | None = None
     message_count: int | None = None
+    conversation_id: str | None = None
+    email_message_id: str | None = None
+    folder: str | None = None
 
     def metadata(self) -> dict:
         """Return metadata dict for ChromaDB storage."""
@@ -28,6 +31,12 @@ class MeetingNote:
             meta["chat_id"] = self.chat_id
         if self.message_count is not None:
             meta["message_count"] = self.message_count
+        if self.conversation_id is not None:
+            meta["conversation_id"] = self.conversation_id
+        if self.email_message_id is not None:
+            meta["email_message_id"] = self.email_message_id
+        if self.folder is not None:
+            meta["folder"] = self.folder
         return meta
 
     def to_document(self) -> str:

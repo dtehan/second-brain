@@ -76,3 +76,70 @@ def add_chat_note(
     )
     vector_store.add_note(note)
     return note, f"Chat note added (id: {note.id}): {subject} with {', '.join(note.attendees)}"
+
+
+def add_email_note(
+    participants: list[str],
+    date: str,
+    subject: str,
+    content: str,
+    conversation_id: str | None = None,
+    email_message_id: str | None = None,
+    folder: str = "done",
+) -> tuple[MeetingNote | None, str]:
+    """Create and store an email note. Returns (note, message).
+
+    If conversation_id is provided and already exists, returns (None, duplicate_warning).
+    """
+    if conversation_id:
+        existing = vector_store.list_notes(
+            where={"conversation_id": conversation_id}, limit=1
+        )
+        if existing:
+            return None, f"Duplicate: conversation_id '{conversation_id}' already exists (note {existing[0]['id'][:8]})"
+
+    source = "email_sent" if folder == "sent" else "email_done"
+    note = MeetingNote(
+        attendees=participants,
+        date=datetime.fromisoformat(date),
+        subject=subject,
+        content=content,
+        source=source,
+        conversation_id=conversation_id,
+        email_message_id=email_message_id,
+        folder=folder,
+    )
+    vector_store.add_note(note)
+    return note, f"Email note added (id: {note.id}): {subject} with {', '.join(note.attendees)}"
+
+
+def get_processed_ids(source_type: str = "all") -> dict[str, list[str]]:
+    """Return IDs already stored, grouped by type.
+
+    source_type: "email", "chat", or "all"
+    """
+    result = {}
+
+    if source_type in ("email", "all"):
+        email_notes = vector_store.list_notes(
+            where={"source": {"$in": ["email_done", "email_sent"]}},
+            limit=1000,
+        )
+        result["email"] = [
+            n["metadata"]["conversation_id"]
+            for n in email_notes
+            if n["metadata"].get("conversation_id")
+        ]
+
+    if source_type in ("chat", "all"):
+        chat_notes = vector_store.list_notes(
+            where={"source": "teams_chat"},
+            limit=1000,
+        )
+        result["chat"] = [
+            n["metadata"]["chat_id"]
+            for n in chat_notes
+            if n["metadata"].get("chat_id")
+        ]
+
+    return result

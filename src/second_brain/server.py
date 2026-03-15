@@ -82,7 +82,8 @@ def list_notes(limit: int = 50, offset: int = 0) -> str:
     lines = []
     for n in notes:
         meta = n["metadata"]
-        prefix = "[Chat] " if meta.get("source") == "teams_chat" else ""
+        prefix = "[Email] " if meta.get("source", "").startswith("email_") else \
+                 "[Chat] " if meta.get("source") == "teams_chat" else ""
         lines.append(f"- [{n['id'][:8]}] {prefix}{meta['subject']} ({meta['date'][:10]}) — {meta['attendees']}")
     return f"Showing {len(notes)} of {total} notes:\n" + "\n".join(lines)
 
@@ -97,6 +98,68 @@ def delete_note(note_id: str) -> str:
     if store.delete_note(note_id):
         return f"Note {note_id} deleted."
     return f"Note {note_id} not found."
+
+
+# ── Email Ingestion ──────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def add_email_note(
+    participants: list[str],
+    date: str,
+    subject: str,
+    content: str,
+    conversation_id: str | None = None,
+    email_message_id: str | None = None,
+    folder: str = "done",
+) -> str:
+    """Store an Outlook email thread as a note.
+
+    Orchestration flow:
+    1. Call list_processed_ids("email") to get already-stored conversation IDs
+    2. Fetch emails via M365 outlook_email_search, skipping known IDs
+    3. Summarize each thread, then call this tool to store it
+
+    Args:
+        participants: List of people on the email thread
+        date: Email date in ISO format (e.g. "2026-03-15")
+        subject: Email subject line
+        content: Summarized email thread content
+        conversation_id: Outlook conversation thread ID for deduplication
+        email_message_id: Latest message ID in the thread
+        folder: Source folder — "done" or "sent" (default "done")
+    """
+    note, message = store.add_email_note(
+        participants=participants,
+        date=date,
+        subject=subject,
+        content=content,
+        conversation_id=conversation_id,
+        email_message_id=email_message_id,
+        folder=folder,
+    )
+    return message
+
+
+@mcp.tool()
+def list_processed_ids(source_type: str = "all") -> str:
+    """List IDs of already-processed emails and chats to avoid re-ingesting duplicates.
+
+    Call this BEFORE fetching from M365 to know what to skip.
+
+    Args:
+        source_type: "email", "chat", or "all" (default "all")
+    """
+    result = store.get_processed_ids(source_type)
+    lines = []
+    for key, ids in result.items():
+        if ids:
+            lines.append(f"**{key}** ({len(ids)} processed):")
+            for id_ in ids:
+                lines.append(f"  - {id_}")
+        else:
+            lines.append(f"**{key}**: none processed")
+    return "\n".join(lines) if lines else "No processed IDs found."
 
 
 # ── Chat Ingestion ───────────────────────────────────────────────────────────
@@ -323,7 +386,8 @@ def _format_search_results(results: list[dict]) -> str:
         meta = r["metadata"]
         distance = r.get("distance")
         score = f" (relevance: {1 - distance:.2f})" if distance is not None else ""
-        prefix = "[Chat] " if meta.get("source") == "teams_chat" else ""
+        prefix = "[Email] " if meta.get("source", "").startswith("email_") else \
+                 "[Chat] " if meta.get("source") == "teams_chat" else ""
         lines.append(
             f"### {prefix}{meta['subject']} ({meta['date'][:10]}){score}\n"
             f"ID: {r['id']}\n"

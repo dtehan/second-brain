@@ -258,6 +258,88 @@ Once stored, chat notes appear in all existing tools — `search_notes`, `summar
 
 ---
 
+### Capturing Outlook Emails
+
+Second Brain can store email threads from your Outlook folders ("1. Done" and "Sent") alongside meeting and chat notes. Claude Desktop orchestrates the flow — it checks what's already stored, fetches new emails via the Microsoft 365 MCP, summarizes threads, and stores them with deduplication.
+
+**You:**
+> Capture my emails from the Done folder since January
+
+Claude runs the following flow:
+
+**Step 1 — Check what's already processed:**
+```
+Tool: list_processed_ids
+  source_type: "email"
+```
+
+Returns:
+```
+**email**: none processed
+```
+
+**Step 2 — Fetch emails via M365:**
+```
+Tool (M365): outlook_email_search
+  folderName: "1. Done"
+  afterDateTime: "2026-01-01"
+```
+
+Claude reads each thread, groups by conversation, skips any `conversation_id` already in the processed list, and summarizes each thread.
+
+**Step 3 — Store each thread:**
+```
+Tool: add_email_note
+  participants: ["Daniel Tehan", "Jane Doe", "Bob Smith"]
+  date: "2026-02-10"
+  subject: "Q1 Budget Approval"
+  content: "Thread summary:\n- Jane requested budget sign-off for Q1 data platform costs\n- Bob approved with a note to revisit cloud spend in April\n- Daniel confirmed resource allocation"
+  conversation_id: "AAQkAGI2..."
+  email_message_id: "AAMkAGI2..."
+  folder: "done"
+```
+
+**You:**
+> Now do the same for my Sent folder
+
+```
+Tool: list_processed_ids
+  source_type: "email"
+```
+
+Returns the conversation IDs already stored — Claude skips those and only processes new threads from Sent.
+
+```
+Tool: add_email_note
+  participants: ["Daniel Tehan", "Carol Lee"]
+  date: "2026-02-15"
+  subject: "Follow-up: ClearScape Demo"
+  content: "Daniel sent follow-up with demo recording and next steps..."
+  conversation_id: "AAQkAHJ3..."
+  folder: "sent"
+```
+
+Email notes are tagged with `[Email]` in list and search results. The `conversation_id` field prevents duplicates across folders — if the same thread appears in both Done and Sent, it's only stored once.
+
+**You:**
+> What emails have I processed so far?
+
+```
+Tool: list_processed_ids
+  source_type: "email"
+```
+
+Returns:
+```
+**email** (2 processed):
+  - AAQkAGI2...
+  - AAQkAHJ3...
+```
+
+Once stored, email notes appear in all existing tools — `search_notes`, `summarize_topic`, `summarize_person`, `find_connections`, etc.
+
+---
+
 ### Deleting a Note
 
 **You:**
@@ -275,7 +357,9 @@ Tool: delete_note
 | Tool | Description |
 |------|-------------|
 | `add_note` | Add a meeting note with attendees, date, subject, content |
+| `add_email_note` | Store an Outlook email thread (with deduplication via `conversation_id`) |
 | `add_chat_note` | Store a Teams chat conversation (with deduplication via `chat_id`) |
+| `list_processed_ids` | List already-stored email/chat IDs to avoid re-ingesting duplicates |
 | `suggest_subject` | Find existing subjects matching a chat's participants and topic |
 | `import_notes` | Bulk import from OneNote export format |
 | `get_note` | Retrieve a specific note by ID |
