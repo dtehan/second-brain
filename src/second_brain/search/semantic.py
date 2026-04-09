@@ -1,5 +1,7 @@
 """Semantic search operations."""
 
+from datetime import datetime
+
 from ..storage import vector_store
 from ..config import TOP_K_RESULTS
 
@@ -66,10 +68,16 @@ def search_by_date_range(
 
     If query is provided, also performs semantic search within those results.
     """
+    start_ts = datetime.fromisoformat(start_date).timestamp()
+    end_dt = datetime.fromisoformat(end_date)
+    # If end_date has no time component, set to end-of-day so notes on that day are included
+    if end_dt.hour == 0 and end_dt.minute == 0 and end_dt.second == 0:
+        end_dt = end_dt.replace(hour=23, minute=59, second=59)
+    end_ts = end_dt.timestamp()
     where = {
         "$and": [
-            {"date": {"$gte": start_date}},
-            {"date": {"$lte": end_date}},
+            {"date_ts": {"$gte": start_ts}},
+            {"date_ts": {"$lte": end_ts}},
         ]
     }
     if query:

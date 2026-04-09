@@ -13,7 +13,7 @@ vs._client = None
 vs._collection = None
 
 from second_brain.notes.store import add_note
-from second_brain.search.semantic import search_notes, search_by_person
+from second_brain.search.semantic import search_notes, search_by_person, search_by_date_range
 from second_brain.search.connections import find_connections, find_connections_by_topic
 
 
@@ -68,3 +68,24 @@ def test_find_connections_by_note():
     assert len(related) > 0
     # Should not include the original note
     assert all(r["id"] != note_id for r in related)
+
+
+def test_search_by_date_range():
+    results = search_by_date_range("2026-03-10", "2026-03-12")
+    assert len(results) >= 2
+    for r in results:
+        assert r["metadata"]["date"] >= "2026-03-10"
+        assert r["metadata"]["date"] <= "2026-03-13"
+
+
+def test_search_by_date_range_with_query():
+    results = search_by_date_range("2026-03-10", "2026-03-14", query="MCP server")
+    assert len(results) > 0
+    assert "MCP" in results[0]["metadata"]["subject"]
+
+
+def test_search_by_date_range_end_of_day():
+    """Notes on the end_date should be included even when end_date has no time."""
+    results = search_by_date_range("2026-03-14", "2026-03-14")
+    assert len(results) >= 1
+    assert any("Data DNA" in r["metadata"]["subject"] for r in results)

@@ -23,6 +23,7 @@ class MeetingNote:
         meta = {
             "attendees": ", ".join(self.attendees),
             "date": self.date.isoformat(),
+            "date_ts": self.date.timestamp(),
             "subject": self.subject,
             "source": self.source,
             "created_at": self.created_at.isoformat(),

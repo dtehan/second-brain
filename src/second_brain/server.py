@@ -5,6 +5,7 @@ from mcp.server.fastmcp import FastMCP
 from .notes import store
 from .search import semantic, connections
 from .storage import vector_store
+from .todos import store as todo_store
 
 mcp = FastMCP("Second Brain")
 
@@ -374,6 +375,62 @@ def list_topics(n_sample: int = 50) -> str:
         subjects[subj] = subjects.get(subj, 0) + 1
     lines = [f"- {subj} ({count}x)" if count > 1 else f"- {subj}" for subj, count in sorted(subjects.items())]
     return f"Topics across {len(notes)} notes:\n" + "\n".join(lines)
+
+
+# ── Todo List ────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def add_todo(text: str) -> str:
+    """Add a new todo item.
+
+    Args:
+        text: The todo item description
+    """
+    todo = todo_store.add_todo(text)
+    return f"Todo added (id: {todo.id}): {todo.text}"
+
+
+@mcp.tool()
+def complete_todo(todo_id: str) -> str:
+    """Mark a todo item as done.
+
+    Args:
+        todo_id: The unique identifier of the todo item
+    """
+    if todo_store.complete_todo(todo_id):
+        return f"Todo {todo_id} marked as done."
+    return f"Todo {todo_id} not found."
+
+
+@mcp.tool()
+def delete_todo(todo_id: str) -> str:
+    """Permanently delete a todo item.
+
+    Args:
+        todo_id: The unique identifier of the todo item
+    """
+    if todo_store.delete_todo(todo_id):
+        return f"Todo {todo_id} deleted."
+    return f"Todo {todo_id} not found."
+
+
+@mcp.tool()
+def list_todos(include_done: bool = False) -> str:
+    """List todo items. By default shows only pending items.
+
+    Args:
+        include_done: Set to true to also show completed items (default false)
+    """
+    todos = todo_store.list_todos(include_done=include_done)
+    if not todos:
+        return "No todo items found." if include_done else "No pending todo items."
+    lines = []
+    for t in todos:
+        status = "[done] " if t.status == "done" else ""
+        lines.append(f"- [{t.id[:8]}] {status}{t.text}")
+    label = "All" if include_done else "Pending"
+    return f"{label} todos ({len(todos)}):\n" + "\n".join(lines)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

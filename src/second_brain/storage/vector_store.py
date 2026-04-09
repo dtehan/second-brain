@@ -10,11 +10,17 @@ _client: chromadb.ClientAPI | None = None
 _collection: chromadb.Collection | None = None
 
 
-def get_collection() -> chromadb.Collection:
+def get_client() -> chromadb.ClientAPI:
     global _client, _collection
-    if _collection is None:
+    if _client is None:
         _client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-        _collection = _client.get_or_create_collection(
+    return _client
+
+
+def get_collection() -> chromadb.Collection:
+    global _collection
+    if _collection is None:
+        _collection = get_client().get_or_create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},
         )
