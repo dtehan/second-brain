@@ -428,7 +428,7 @@ def list_todos(include_done: bool = False) -> str:
     lines = []
     for t in todos:
         status = "[done] " if t.status == "done" else ""
-        lines.append(f"- [{t.id[:8]}] {status}{t.text}")
+        lines.append(f"- [{t.id}] {status}{t.text}")
     label = "All" if include_done else "Pending"
     return f"{label} todos ({len(todos)}):\n" + "\n".join(lines)
 
