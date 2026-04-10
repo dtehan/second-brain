@@ -404,6 +404,19 @@ def complete_todo(todo_id: str) -> str:
 
 
 @mcp.tool()
+def edit_todo(todo_id: str, text: str) -> str:
+    """Edit the text of an existing todo item.
+
+    Args:
+        todo_id: The unique identifier of the todo item
+        text: The new text for the todo item
+    """
+    if todo_store.edit_todo(todo_id, text):
+        return f"Todo {todo_id} updated: {text}"
+    return f"Todo {todo_id} not found."
+
+
+@mcp.tool()
 def delete_todo(todo_id: str) -> str:
     """Permanently delete a todo item.
 

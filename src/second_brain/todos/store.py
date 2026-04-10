@@ -43,6 +43,18 @@ def complete_todo(todo_id: str) -> bool:
     return True
 
 
+def edit_todo(todo_id: str, text: str) -> bool:
+    """Update the text of a todo item. Returns True if found and updated."""
+    col = get_collection()
+    result = col.get(ids=[todo_id], include=["documents", "metadatas"])
+    if not result["ids"]:
+        return False
+    meta = result["metadatas"][0]
+    meta["text"] = text
+    col.update(ids=[todo_id], documents=[text], metadatas=[meta])
+    return True
+
+
 def delete_todo(todo_id: str) -> bool:
     """Permanently delete a todo item. Returns True if deleted."""
     col = get_collection()
