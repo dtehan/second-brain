@@ -52,3 +52,35 @@ npx tsc --noEmit              # Type-check
 - Accounts use `account_contacts` for team roles, not hardcoded columns.
 - Dedup via `email_message_id`, `chat_id`, `calendar_event_id`, or `fingerprint`.
 - All content is searchable via `brain_search` (hybrid FTS5 + vector similarity).
+
+### Skills
+`skills/` — Prompt skill files for Claude Desktop and Claude Code CLI.
+
+| File | Purpose |
+|---|---|
+| `email-ingestion.md` | M365 email → brain2 pipeline with watermarks and dedup |
+| `chat-ingestion.md` | Teams chat → brain2 pipeline with watermarks and dedup |
+| `note-filing.md` | User notes → calendar match → brain2 |
+| `dreaming.md` | Incremental connection building, syntheses, and themes |
+| `lint.md` | Database maintenance checklist (data quality, stale items, Teams messages) |
+
+### Daily Ingestion (CronCreate)
+
+Ingestion runs via **CronCreate** (Claude Code session jobs), because it requires the M365 MCP which is only available in Claude Desktop.
+
+**Session start:** At the start of every new Claude Code session in this repo, run `CronList` and recreate any missing jobs. All jobs auto-expire after 7 days and are session-only.
+
+| Job | Schedule | Skill |
+|---|---|---|
+| Email ingestion | `43 6 * * 1-5` (6:43am weekdays) | `skills/email-ingestion.md` |
+| Chat ingestion | `47 6 * * 1-5` (6:47am weekdays) | `skills/chat-ingestion.md` |
+| Database lint | `33 16 * * 5` (4:33pm Fridays) | `skills/lint.md` |
+
+### Daily Digest (shell cron)
+
+`~/brain2-digest/CLAUDE.md` — Instructions for scheduled Claude Code digest runs.
+
+Cron (7:03am weekdays, shell — runs after ingestion):
+```
+3 7 * * 1-5 cd ~/brain2-digest && claude --print --dangerously-skip-permissions -p "$(cat CLAUDE.md)" >> ~/brain2-digest/digest.log 2>&1
+```
