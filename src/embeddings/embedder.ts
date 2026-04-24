@@ -7,7 +7,7 @@ let _extractor: FeatureExtractionPipeline | null = null;
 let _loading: Promise<FeatureExtractionPipeline> | null = null;
 
 function getCacheDir(): string {
-  const dir = process.env['BRAIN2_MODEL_CACHE'] || `${process.env['HOME']}/.brain2/models`;
+  const dir = process.env['BRAIN2_MODEL_CACHE'] || `${process.env['HOME']}/Code/brain2/data/models`;
   mkdirSync(dir, { recursive: true });
   return dir;
 }

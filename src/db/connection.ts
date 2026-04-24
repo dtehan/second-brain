@@ -9,7 +9,7 @@ const EMBEDDING_DIM = 384;
 let _db: Database.Database | null = null;
 
 export function getDbPath(): string {
-  return process.env['BRAIN2_DB'] || `${process.env['HOME']}/.brain2/brain2.db`;
+  return process.env['BRAIN2_DB'] || `${process.env['HOME']}/Code/brain2/data/brain2.db`;
 }
 
 export function getDb(): Database.Database {

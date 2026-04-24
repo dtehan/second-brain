@@ -3,14 +3,14 @@
 ## Overview
 
 brain2 is a database-first personal knowledge management system with a local MCP server.
-All data lives in SQLite at `~/.brain2/brain2.db`. Claude accesses it via 28 MCP tools.
+All data lives in SQLite at `data/brain2.db`. Claude accesses it via 28 MCP tools.
 
 ## Quick Reference
 
 ### Running the server
 ```bash
 npx tsx src/index.ts           # Start MCP server (stdio)
-npx tsx src/index.ts --import-vault ~/code/brain/second-brain  # Run vault migration
+npx tsx src/index.ts --import-vault <path>  # Run vault migration
 ```
 
 ### Testing
@@ -20,9 +20,9 @@ npx tsc --noEmit              # Type-check
 ```
 
 ### Architecture
-- **Database**: SQLite + sqlite-vec (384-dim vectors) + FTS5. Single file at `~/.brain2/brain2.db`
+- **Database**: SQLite + sqlite-vec (384-dim vectors) + FTS5. Single file at `data/brain2.db`
 - **MCP Server**: TypeScript, @modelcontextprotocol/sdk, stdio transport
-- **Embeddings**: Local via @xenova/transformers (all-MiniLM-L6-v2). Cached at `~/.brain2/models/`
+- **Embeddings**: Local via @xenova/transformers (all-MiniLM-L6-v2). Cached at `data/models/`
 - **Dreaming**: Claude Code CLI skills call brain2 MCP tools. No LLM calls from the server.
 
 ### Entity Types
@@ -63,6 +63,8 @@ npx tsc --noEmit              # Type-check
 | `note-filing.md` | User notes → calendar match → brain2 |
 | `dreaming.md` | Incremental connection building, syntheses, and themes |
 | `lint.md` | Database maintenance checklist (data quality, stale items, Teams messages) |
+| `skill-extraction.md` | Extract reusable knowledge from work sessions into new skills |
+| `digest.md` | Daily morning briefing (todos, meetings, stale accounts, ingestion status) |
 
 ### Daily Ingestion (CronCreate)
 
@@ -78,9 +80,7 @@ Ingestion runs via **CronCreate** (Claude Code session jobs), because it require
 
 ### Daily Digest (shell cron)
 
-`~/brain2-digest/CLAUDE.md` — Instructions for scheduled Claude Code digest runs.
-
 Cron (7:03am weekdays, shell — runs after ingestion):
 ```
-3 7 * * 1-5 cd ~/brain2-digest && claude --print --dangerously-skip-permissions -p "$(cat CLAUDE.md)" >> ~/brain2-digest/digest.log 2>&1
+3 7 * * 1-5 cd ~/Code/brain2 && claude --print --dangerously-skip-permissions -p "$(cat skills/digest.md)" >> ~/Code/brain2/digest.log 2>&1
 ```

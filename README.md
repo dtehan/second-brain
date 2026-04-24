@@ -37,7 +37,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
       "command": "npx",
       "args": ["tsx", "/path/to/brain2/src/index.ts"],
       "env": {
-        "BRAIN2_DB": "~/.brain2/brain2.db"
+        "BRAIN2_DB": "/path/to/brain2/data/brain2.db"
       }
     }
   }
@@ -60,7 +60,7 @@ npm test                      # Run tests
 npx tsc --noEmit              # Type-check
 ```
 
-Once the server is running, Claude can use all 28 tools through natural conversation:
+Once the server is running, Claude can use all 28 tools and 7 skill prompts through natural conversation:
 
 - *"What's happening with the Dell account?"* — searches items, gets account profile and contacts
 - *"Process my emails"* — runs the email ingestion pipeline
@@ -70,8 +70,8 @@ Once the server is running, Claude can use all 28 tools through natural conversa
 ## Architecture
 
 ```
-~/.brain2/brain2.db          SQLite + sqlite-vec + FTS5
-~/.brain2/models/            Cached embedding model (all-MiniLM-L6-v2)
+data/brain2.db               SQLite + sqlite-vec + FTS5
+data/models/                 Cached embedding model (all-MiniLM-L6-v2)
 
 src/
   index.ts                   Entry point (stdio MCP transport + vault migration CLI)
@@ -93,21 +93,37 @@ src/
   migration/                 Obsidian vault import
   utils/                     Hashing, ID generation
 
-skills/                      Claude Code skill prompts
+  prompts.ts                 Registers skills as MCP prompts for Claude Desktop
+
+skills/                      Skill prompts (MCP prompts + Claude Code skills)
   email-ingestion.md         M365 email → brain2 pipeline
   chat-ingestion.md          Teams chat → brain2 pipeline
   note-filing.md             User notes → calendar match → brain2
   dreaming.md                Connection building and syntheses
   lint.md                    Database maintenance checklist
-
-~/brain2-digest/CLAUDE.md    Daily digest cron configuration
+  digest.md                  Daily morning briefing
+  skill-extraction.md        Extract reusable knowledge from work sessions
 ```
+
+## Skills
+
+Skills are available as **MCP prompts** in Claude Desktop (via the `/` menu) and as **Claude Code skills** (via `~/.claude/skills/`). Both read from the same `skills/*.md` files.
+
+| Skill | Description |
+|---|---|
+| `email-ingestion` | Fetch M365 emails and file them to brain2 |
+| `chat-ingestion` | Fetch Microsoft Teams chats and file them to brain2 |
+| `note-filing` | File user notes by matching them to calendar meetings |
+| `dreaming` | Incremental connection building — entities, summaries, themes |
+| `lint` | Database maintenance checklist — data quality, stale items |
+| `digest` | Daily morning briefing — todos, meetings, stale accounts |
+| `skill-extraction` | Extract reusable knowledge from work sessions |
 
 ## Automation
 
-### Ingestion (CronCreate — Claude Desktop session)
+### Ingestion (CronCreate — Claude Code session)
 
-These run inside Claude Desktop because they require the M365 MCP for email/calendar/Teams access. They are session-only and recreated at the start of each Claude Code session.
+These run inside Claude Code because they require the M365 MCP for email/calendar/Teams access. They are session-only and recreated at the start of each Claude Code session.
 
 | Job | Schedule | Description |
 |---|---|---|
@@ -120,7 +136,7 @@ These run inside Claude Desktop because they require the M365 MCP for email/cale
 Runs via `crontab` at 7:03am weekdays, after ingestion completes:
 
 ```
-3 7 * * 1-5 cd ~/brain2-digest && claude --print --dangerously-skip-permissions -p "$(cat CLAUDE.md)" >> ~/brain2-digest/digest.log 2>&1
+3 7 * * 1-5 cd ~/Code/brain2 && claude --print --dangerously-skip-permissions -p "$(cat skills/digest.md)" >> ~/Code/brain2/digest.log 2>&1
 ```
 
 Produces a morning briefing: overdue todos, upcoming meetings, stale accounts, ingestion status.

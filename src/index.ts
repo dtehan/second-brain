@@ -3,7 +3,11 @@ import { startServer } from './server.js';
 const args = process.argv.slice(2);
 
 if (args[0] === '--import-vault') {
-  const vaultPath = args[1] || `${process.env['HOME']}/code/brain/second-brain`;
+  const vaultPath = args[1];
+  if (!vaultPath) {
+    console.error('Usage: npx tsx src/index.ts --import-vault <path>');
+    process.exit(1);
+  }
   console.log(`Importing vault from: ${vaultPath}`);
 
   const { getDb, closeDb } = await import('./db/connection.js');
