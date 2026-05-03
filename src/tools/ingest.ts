@@ -27,12 +27,29 @@ async function updateVectorIndex(db: Database.Database, entityId: string, text: 
   db.prepare('INSERT INTO search_vec (entity_id, embedding) VALUES (?, ?)').run(entityId, buf);
 }
 
-function ensurePerson(db: Database.Database, name: string): string {
+function normalizeName(name: string): { name: string; company: string | null } {
+  // Strip "Name (Company)" pattern — use clean name, extract company
+  const match = name.match(/^(.+?)\s*\(([^)]+)\)$/);
+  if (match) {
+    return { name: match[1].trim(), company: match[2].trim() };
+  }
+  return { name: name.trim(), company: null };
+}
+
+function ensurePerson(db: Database.Database, rawName: string): string {
+  const { name, company } = normalizeName(rawName);
+
   const existing = db.prepare('SELECT id FROM people WHERE name = ?').get(name) as { id: string } | undefined;
-  if (existing) return existing.id;
+  if (existing) {
+    // Backfill company if we extracted one and the record doesn't have it
+    if (company) {
+      db.prepare('UPDATE people SET company = COALESCE(company, ?) WHERE id = ?').run(company, existing.id);
+    }
+    return existing.id;
+  }
 
   const id = generateId();
-  db.prepare('INSERT INTO people (id, name) VALUES (?, ?)').run(id, name);
+  db.prepare('INSERT INTO people (id, name, company) VALUES (?, ?, ?)').run(id, name, company);
   return id;
 }
 

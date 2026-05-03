@@ -41,7 +41,7 @@ Identify mentions of:
 - **Topics**: key themes (AI, MCP, security, compliance, etc.)
 
 For each discovered entity:
-- `brain_upsert_person(name, company)` for new people
+- `brain_upsert_person(name, company)` for new people — **clean names only** (e.g. `"Angela Brewer"`, never `"Angela Brewer (Dell)"`). Company goes in the `company` parameter.
 - `brain_add_edge(item → person/account/project, 'mentions')` with confidence 0.8
 
 ### 4. Person Summaries

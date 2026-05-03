@@ -29,6 +29,11 @@ For each email, collect:
 - `folder` — "done" or "sent"
 - Full email body
 
+**IMPORTANT — Person name format:**
+- Use **clean names only**: `"Angela Brewer"`, never `"Angela Brewer (Dell)"`
+- Company belongs in the `company` field via `brain_upsert_person`, not in the name
+- Nicknames: use the form from the email header (e.g. if header says "Chris Weaver", use that consistently)
+
 ### 3. Check Dedup
 
 For each email, call:

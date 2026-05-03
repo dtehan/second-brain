@@ -41,12 +41,17 @@ For each candidate meeting, score:
 
 ### 4. Ingest to brain2
 
+**IMPORTANT — Person name format:**
+- Use **clean names only**: `"Angela Brewer"`, never `"Angela Brewer (Dell)"`
+- Company belongs in the `company` field via `brain_upsert_person`, not in the name
+- Use the display name from the calendar invite, not variations with company suffixes
+
 Call `brain_ingest_meeting` with:
 ```
 title (from calendar event or inferred),
 date (from calendar),
 content (user's raw notes — preserved verbatim),
-attendees (from calendar invite, merged with names in note),
+attendees (from calendar invite, merged with names in note — clean names only),
 account (if customer meeting),
 meeting_type (infer: account | internal | 1:1 | cross-functional),
 calendar_event_id (from M365)

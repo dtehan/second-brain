@@ -24,6 +24,11 @@ For each chat thread, collect:
 - `date` — date of the most recent message (ISO format)
 - Full message content (chronological order)
 
+**IMPORTANT — Person name format:**
+- Use **clean names only**: `"Angela Brewer"`, never `"Angela Brewer (Dell)"`
+- Company belongs in the `company` field via `brain_upsert_person`, not in the name
+- Use the display name from Teams (e.g. "Chris Weaver"), not variations with company suffixes
+
 ### 3. Deduplicate
 
 For each chat, call `brain_check_dedup(chat_id=<id>)`.
