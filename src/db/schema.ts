@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
+import { MIGRATIONS } from './migrations.js';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA_SQL = `
 -- ============================================================
@@ -267,23 +268,33 @@ BEGIN UPDATE todos SET updated_at = datetime('now') WHERE id = NEW.id; END;
 `;
 
 export function initializeSchema(db: Database.Database): void {
-  // Check if schema is already at current version
   const hasVersionTable = db.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
   ).get();
 
+  let currentVersion = 0;
   if (hasVersionTable) {
-    const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as { version: number } | undefined;
-    if (row && row.version >= SCHEMA_VERSION) {
-      return; // Schema is up to date
-    }
+    const row = db.prepare('SELECT MAX(version) as version FROM schema_version').get() as { version: number | null } | undefined;
+    currentVersion = row?.version ?? 0;
   }
 
-  // Apply schema
+  if (currentVersion >= SCHEMA_VERSION) return;
+
+  // Apply (or re-apply, idempotently) the base schema.
   db.exec(SCHEMA_SQL);
 
-  // Record version
-  db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
+  if (currentVersion < 1) {
+    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(1);
+    currentVersion = 1;
+  }
+
+  for (const m of MIGRATIONS) {
+    if (m.version > currentVersion) {
+      m.fn(db);
+      db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(m.version);
+      currentVersion = m.version;
+    }
+  }
 }
 
 export { SCHEMA_VERSION };

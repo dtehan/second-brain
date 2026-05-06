@@ -78,33 +78,49 @@ export function registerIngestTools(server: McpServer, db: Database.Database): v
       source: z.enum(['manual', 'm365_calendar']).optional().default('manual'),
     },
     async ({ title, date, content, summary, attendees, account, meeting_type, calendar_event_id, source }) => {
-      const id = generateId();
       const fingerprint = computeFingerprint(content);
       const resolvedSource = source ?? 'manual';
 
-      // Resolve account
       let accountId: string | null = null;
       if (account) {
         const acc = db.prepare('SELECT id FROM accounts WHERE name = ?').get(account) as { id: string } | undefined;
         if (acc) accountId = acc.id;
       }
 
-      db.prepare(`
-        INSERT INTO items (id, title, item_type, date, content, summary, meeting_type, account_id, source, calendar_event_id, fingerprint)
-        VALUES (?, ?, 'meeting', ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(id, title, date, content, summary ?? null, meeting_type ?? null, accountId, resolvedSource, calendar_event_id ?? null, fingerprint);
+      const existing = calendar_event_id
+        ? (db.prepare('SELECT id FROM items WHERE calendar_event_id = ?').get(calendar_event_id) as { id: string } | undefined)
+        : undefined;
 
-      // Link attendees
+      let id: string;
+      let action: 'created' | 'updated';
+
+      if (existing) {
+        id = existing.id;
+        action = 'updated';
+        db.prepare(`
+          UPDATE items SET
+            title = ?, date = ?, content = ?, summary = ?, meeting_type = ?,
+            account_id = ?, source = ?, fingerprint = ?
+          WHERE id = ?
+        `).run(title, date, content, summary ?? null, meeting_type ?? null, accountId, resolvedSource, fingerprint, id);
+      } else {
+        id = generateId();
+        action = 'created';
+        db.prepare(`
+          INSERT INTO items (id, title, item_type, date, content, summary, meeting_type, account_id, source, calendar_event_id, fingerprint)
+          VALUES (?, ?, 'meeting', ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, title, date, content, summary ?? null, meeting_type ?? null, accountId, resolvedSource, calendar_event_id ?? null, fingerprint);
+      }
+
       if (attendees?.length) {
         const personIds = attendees.map(name => ensurePerson(db, name));
         linkItemPeople(db, id, personIds);
       }
 
-      // Update search indexes
       updateSearchIndex(db, id, 'item', title, content, date, []);
       await updateVectorIndex(db, id, `${title}\n${content}`);
 
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ id, title, date, attendees_count: attendees?.length ?? 0 }) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ id, title, date, attendees_count: attendees?.length ?? 0, action }) }] };
     }
   );
 
@@ -129,7 +145,6 @@ export function registerIngestTools(server: McpServer, db: Database.Database): v
       })).optional().describe('Contact details extracted from email signatures'),
     },
     async ({ subject, date, content, participants, email_message_id, conversation_id, folder, account, contact_info }) => {
-      const id = generateId();
       const fingerprint = computeFingerprint(content);
 
       let accountId: string | null = null;
@@ -138,12 +153,29 @@ export function registerIngestTools(server: McpServer, db: Database.Database): v
         if (acc) accountId = acc.id;
       }
 
-      db.prepare(`
-        INSERT INTO items (id, title, item_type, date, content, account_id, source, email_message_id, conversation_id, folder, fingerprint)
-        VALUES (?, ?, 'email', ?, ?, ?, 'm365_email', ?, ?, ?, ?)
-      `).run(id, subject, date, content, accountId, email_message_id, conversation_id ?? null, folder, fingerprint);
+      const existing = db.prepare('SELECT id FROM items WHERE email_message_id = ?').get(email_message_id) as { id: string } | undefined;
 
-      // Link participants
+      let id: string;
+      let action: 'created' | 'updated';
+
+      if (existing) {
+        id = existing.id;
+        action = 'updated';
+        db.prepare(`
+          UPDATE items SET
+            title = ?, date = ?, content = ?, account_id = ?,
+            conversation_id = ?, folder = ?, fingerprint = ?
+          WHERE id = ?
+        `).run(subject, date, content, accountId, conversation_id ?? null, folder, fingerprint, id);
+      } else {
+        id = generateId();
+        action = 'created';
+        db.prepare(`
+          INSERT INTO items (id, title, item_type, date, content, account_id, source, email_message_id, conversation_id, folder, fingerprint)
+          VALUES (?, ?, 'email', ?, ?, ?, 'm365_email', ?, ?, ?, ?)
+        `).run(id, subject, date, content, accountId, email_message_id, conversation_id ?? null, folder, fingerprint);
+      }
+
       const personIds = participants.map(name => ensurePerson(db, name));
       linkItemPeople(db, id, personIds);
 
@@ -165,7 +197,7 @@ export function registerIngestTools(server: McpServer, db: Database.Database): v
       updateSearchIndex(db, id, 'item', subject, content, date, []);
       await updateVectorIndex(db, id, `${subject}\n${content}`);
 
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ id, subject, date, participants_count: participants.length }) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ id, subject, date, participants_count: participants.length, action }) }] };
     }
   );
 
@@ -183,7 +215,6 @@ export function registerIngestTools(server: McpServer, db: Database.Database): v
       account: z.string().optional().describe('Account name if customer chat'),
     },
     async ({ subject, date, content, participants, chat_id, message_count, account }) => {
-      const id = generateId();
       const fingerprint = computeFingerprint(content);
 
       let accountId: string | null = null;
@@ -192,18 +223,43 @@ export function registerIngestTools(server: McpServer, db: Database.Database): v
         if (acc) accountId = acc.id;
       }
 
-      db.prepare(`
-        INSERT INTO items (id, title, item_type, date, content, account_id, source, chat_id, message_count, fingerprint)
-        VALUES (?, ?, 'chat', ?, ?, ?, 'm365_chat', ?, ?, ?)
-      `).run(id, subject, date, content, accountId, chat_id, message_count, fingerprint);
+      const existing = db.prepare('SELECT id, message_count FROM items WHERE chat_id = ?').get(chat_id) as { id: string; message_count: number | null } | undefined;
+
+      let id: string;
+      let action: 'created' | 'updated' | 'skipped';
+
+      if (existing) {
+        id = existing.id;
+        // Guard against out-of-order replays regressing the row.
+        if ((existing.message_count ?? 0) > message_count) {
+          action = 'skipped';
+        } else {
+          action = 'updated';
+          db.prepare(`
+            UPDATE items SET
+              title = ?, date = ?, content = ?, account_id = ?,
+              message_count = ?, fingerprint = ?
+            WHERE id = ?
+          `).run(subject, date, content, accountId, message_count, fingerprint, id);
+        }
+      } else {
+        id = generateId();
+        action = 'created';
+        db.prepare(`
+          INSERT INTO items (id, title, item_type, date, content, account_id, source, chat_id, message_count, fingerprint)
+          VALUES (?, ?, 'chat', ?, ?, ?, 'm365_chat', ?, ?, ?)
+        `).run(id, subject, date, content, accountId, chat_id, message_count, fingerprint);
+      }
 
       const personIds = participants.map(name => ensurePerson(db, name));
       linkItemPeople(db, id, personIds);
 
-      updateSearchIndex(db, id, 'item', subject, content, date, []);
-      await updateVectorIndex(db, id, `${subject}\n${content}`);
+      if (action !== 'skipped') {
+        updateSearchIndex(db, id, 'item', subject, content, date, []);
+        await updateVectorIndex(db, id, `${subject}\n${content}`);
+      }
 
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ id, subject, date, participants_count: participants.length, message_count }) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ id, subject, date, participants_count: participants.length, message_count, action }) }] };
     }
   );
 
@@ -256,15 +312,25 @@ export function registerIngestTools(server: McpServer, db: Database.Database): v
     async ({ email_message_id, chat_id, calendar_event_id, fingerprint, content }) => {
       let existing: { id: string; title: string; message_count?: number } | undefined;
 
+      // ORDER BY guards against the legacy case where multiple rows share the same dedup key
+      // (pre-v2 schema). After v2 the unique indexes make these queries return at most one row.
       if (email_message_id) {
-        existing = db.prepare('SELECT id, title FROM items WHERE email_message_id = ?').get(email_message_id) as typeof existing;
+        existing = db.prepare(
+          'SELECT id, title FROM items WHERE email_message_id = ? ORDER BY datetime(updated_at) DESC LIMIT 1'
+        ).get(email_message_id) as typeof existing;
       } else if (chat_id) {
-        existing = db.prepare('SELECT id, title, message_count FROM items WHERE chat_id = ?').get(chat_id) as typeof existing;
+        existing = db.prepare(
+          'SELECT id, title, message_count FROM items WHERE chat_id = ? ORDER BY COALESCE(message_count, 0) DESC, datetime(updated_at) DESC LIMIT 1'
+        ).get(chat_id) as typeof existing;
       } else if (calendar_event_id) {
-        existing = db.prepare('SELECT id, title FROM items WHERE calendar_event_id = ?').get(calendar_event_id) as typeof existing;
+        existing = db.prepare(
+          'SELECT id, title FROM items WHERE calendar_event_id = ? ORDER BY datetime(updated_at) DESC LIMIT 1'
+        ).get(calendar_event_id) as typeof existing;
       } else if (fingerprint || content) {
         const fp = fingerprint || computeFingerprint(content!);
-        existing = db.prepare('SELECT id, title FROM items WHERE fingerprint = ?').get(fp) as typeof existing;
+        existing = db.prepare(
+          'SELECT id, title FROM items WHERE fingerprint = ? ORDER BY datetime(updated_at) DESC LIMIT 1'
+        ).get(fp) as typeof existing;
       }
 
       if (existing) {

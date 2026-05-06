@@ -1,6 +1,6 @@
 # brain2
 
-Database-first personal knowledge management system powered by a local [MCP](https://modelcontextprotocol.io) server. All data lives in a single SQLite file. Claude accesses it via 28 MCP tools through Claude Desktop or Claude Code.
+Database-first personal knowledge management system powered by a local [MCP](https://modelcontextprotocol.io) server. All data lives in a single SQLite file. Claude accesses it via 29 MCP tools through Claude Desktop or Claude Code.
 
 Replaces an earlier Obsidian vault-based system with structured storage, semantic search, and automated ingestion pipelines.
 

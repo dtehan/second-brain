@@ -11,6 +11,7 @@ import { registerQueryTools } from '../src/tools/query.js';
 import { registerStatsTools } from '../src/tools/stats.js';
 import { registerGraphTools } from '../src/tools/graph.js';
 import { registerSynthesisTools } from '../src/tools/synthesis.js';
+import { registerAdminTools } from '../src/tools/admin.js';
 
 function createTestDb(): Database.Database {
   const db = new Database(':memory:');
@@ -31,6 +32,7 @@ function createTestServer(db: Database.Database): McpServer {
   registerStatsTools(server, db);
   registerGraphTools(server, db);
   registerSynthesisTools(server, db);
+  registerAdminTools(server, db);
   return server;
 }
 
@@ -219,5 +221,203 @@ describe('Ingest Tools', () => {
       { name: 'Chris Alvey', role: 'champion' },
       { name: 'Sarah Chen', role: 'csa' },
     ]);
+  });
+
+  it('upserts a chat on chat_id collision (higher message_count wins)', async () => {
+    const first = await callTool(server, 'brain_ingest_chat', {
+      subject: 'Sync thread', date: '2026-05-06', content: 'first summary',
+      participants: ['Alice'], chat_id: 'thread-xyz', message_count: 5,
+    }) as { id: string; action: string; message_count: number };
+    expect(first.action).toBe('created');
+
+    const second = await callTool(server, 'brain_ingest_chat', {
+      subject: 'Sync thread', date: '2026-05-06', content: 'second summary with more context',
+      participants: ['Alice', 'Bob'], chat_id: 'thread-xyz', message_count: 7,
+    }) as { id: string; action: string; message_count: number };
+
+    expect(second.id).toBe(first.id);
+    expect(second.action).toBe('updated');
+
+    // Only one row for the chat
+    const rows = db.prepare("SELECT id, content, message_count FROM items WHERE chat_id = 'thread-xyz'").all() as Array<{ id: string; content: string; message_count: number }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].message_count).toBe(7);
+    expect(rows[0].content).toBe('second summary with more context');
+
+    // FTS reflects the new content
+    const fts = db.prepare("SELECT entity_id FROM search_fts WHERE search_fts MATCH 'context'").all();
+    expect(fts).toHaveLength(1);
+  });
+
+  it('skips chat upsert when message_count regresses', async () => {
+    await callTool(server, 'brain_ingest_chat', {
+      subject: 'Thread A', date: '2026-05-06', content: 'newer summary',
+      participants: ['Alice'], chat_id: 'thread-replay', message_count: 10,
+    });
+
+    const replay = await callTool(server, 'brain_ingest_chat', {
+      subject: 'Thread A (old)', date: '2026-05-05', content: 'older summary',
+      participants: ['Alice'], chat_id: 'thread-replay', message_count: 4,
+    }) as { id: string; action: string };
+
+    expect(replay.action).toBe('skipped');
+
+    const row = db.prepare("SELECT content, message_count FROM items WHERE chat_id = 'thread-replay'").get() as { content: string; message_count: number };
+    expect(row.message_count).toBe(10);
+    expect(row.content).toBe('newer summary');
+  });
+
+  it('upserts an email on email_message_id collision', async () => {
+    const first = await callTool(server, 'brain_ingest_email', {
+      subject: 'Re: foo', date: '2026-05-06', content: 'v1',
+      participants: ['Alice'], email_message_id: 'msg-A', folder: 'done',
+    }) as { id: string; action: string };
+    expect(first.action).toBe('created');
+
+    const second = await callTool(server, 'brain_ingest_email', {
+      subject: 'Re: foo (updated)', date: '2026-05-06', content: 'v2',
+      participants: ['Alice', 'Bob'], email_message_id: 'msg-A', folder: 'done',
+    }) as { id: string; action: string };
+
+    expect(second.id).toBe(first.id);
+    expect(second.action).toBe('updated');
+
+    const rows = db.prepare("SELECT id, title, content FROM items WHERE email_message_id = 'msg-A'").all() as Array<{ title: string; content: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe('Re: foo (updated)');
+    expect(rows[0].content).toBe('v2');
+  });
+
+  it('upserts a meeting on calendar_event_id collision', async () => {
+    const first = await callTool(server, 'brain_ingest_meeting', {
+      title: 'Standup', date: '2026-05-06', content: 'notes v1',
+      attendees: ['Alice'], calendar_event_id: 'cal-1', source: 'm365_calendar',
+    }) as { id: string; action: string };
+    expect(first.action).toBe('created');
+
+    const second = await callTool(server, 'brain_ingest_meeting', {
+      title: 'Standup (revised)', date: '2026-05-06', content: 'notes v2',
+      attendees: ['Alice', 'Bob'], calendar_event_id: 'cal-1', source: 'm365_calendar',
+    }) as { id: string; action: string };
+
+    expect(second.id).toBe(first.id);
+    expect(second.action).toBe('updated');
+
+    const rows = db.prepare("SELECT title FROM items WHERE calendar_event_id = 'cal-1'").all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('brain_check_dedup is deterministic on chat_id', async () => {
+    await callTool(server, 'brain_ingest_chat', {
+      subject: 'Dedup test', date: '2026-05-06', content: 'c',
+      participants: ['Alice'], chat_id: 'dedup-chat', message_count: 9,
+    });
+
+    const check = await callTool(server, 'brain_check_dedup', { chat_id: 'dedup-chat' }) as { exists: boolean; message_count: number };
+    expect(check.exists).toBe(true);
+    expect(check.message_count).toBe(9);
+  });
+
+  it('brain_merge_items re-targets edges, item_people, and syntheses then drops the row', async () => {
+    // Create two items with two different chat_ids (so we can have both pre-merge)
+    const a = await callTool(server, 'brain_ingest_chat', {
+      subject: 'Keep', date: '2026-05-06', content: 'keeper',
+      participants: ['Alice'], chat_id: 'ka', message_count: 1,
+    }) as { id: string };
+    const b = await callTool(server, 'brain_ingest_chat', {
+      subject: 'Drop', date: '2026-05-06', content: 'to drop',
+      participants: ['Bob'], chat_id: 'kb', message_count: 1,
+    }) as { id: string };
+
+    // Edge from b → some person; will be re-targeted to a
+    await callTool(server, 'brain_upsert_person', { name: 'Carol' });
+    const carol = db.prepare("SELECT id FROM people WHERE name = 'Carol'").get() as { id: string };
+    await callTool(server, 'brain_add_edge', {
+      source_type: 'item', source_id: b.id,
+      target_type: 'person', target_id: carol.id,
+      relation: 'mentions', confidence: 1.0,
+    });
+    // Edge from a ↔ b will become a self-loop after merge — should be deleted
+    await callTool(server, 'brain_add_edge', {
+      source_type: 'item', source_id: a.id,
+      target_type: 'item', target_id: b.id,
+      relation: 'follows_up', confidence: 1.0,
+    });
+
+    // Synthesis that cites both
+    await callTool(server, 'brain_save_synthesis', {
+      synthesis_type: 'connection_discovery', scope: 'test',
+      title: 'cd', content: 'x', source_ids: [a.id, b.id],
+    });
+
+    const result = await callTool(server, 'brain_merge_items', { keep_id: a.id, drop_id: b.id }) as {
+      keep_id: string; drop_id: string; edges_redirected: number; edges_self_loops_removed: number;
+    };
+    expect(result.edges_self_loops_removed).toBe(1);
+    expect(result.edges_redirected).toBe(1);
+
+    // Row b is gone
+    const rowB = db.prepare('SELECT id FROM items WHERE id = ?').get(b.id);
+    expect(rowB).toBeUndefined();
+
+    // Row a survives
+    const rowA = db.prepare('SELECT id FROM items WHERE id = ?').get(a.id) as { id: string };
+    expect(rowA.id).toBe(a.id);
+
+    // The mentions edge now sources from a, not b
+    const edges = db.prepare("SELECT source_id, target_id, relation FROM edges WHERE relation = 'mentions'").all() as Array<{ source_id: string; target_id: string }>;
+    expect(edges).toHaveLength(1);
+    expect(edges[0].source_id).toBe(a.id);
+    expect(edges[0].target_id).toBe(carol.id);
+
+    // Self-loop follows_up is gone
+    const followsUp = db.prepare("SELECT * FROM edges WHERE relation = 'follows_up'").all();
+    expect(followsUp).toHaveLength(0);
+
+    // Bob (only linked through b) now linked to a
+    const aPeople = db.prepare(`
+      SELECT p.name FROM item_people ip JOIN people p ON ip.person_id = p.id WHERE ip.item_id = ? ORDER BY p.name
+    `).all(a.id) as Array<{ name: string }>;
+    expect(aPeople.map(p => p.name)).toEqual(['Alice', 'Bob']);
+
+    // Synthesis source_ids deduplicated to just keep
+    const synth = db.prepare("SELECT source_ids FROM syntheses WHERE scope = 'test'").get() as { source_ids: string };
+    expect(JSON.parse(synth.source_ids)).toEqual([a.id]);
+
+    // Drop's search rows are gone
+    const ftsRow = db.prepare('SELECT entity_id FROM search_fts WHERE entity_id = ?').get(b.id);
+    expect(ftsRow).toBeUndefined();
+  });
+
+  it('migration v2 auto-merges pre-existing chat_id duplicates and adds unique index', async () => {
+    // Build a fresh DB without v2 — simulate the legacy state by inserting two rows with same chat_id directly
+    const legacy = new Database(':memory:');
+    sqliteVec.load(legacy);
+    legacy.pragma('foreign_keys = ON');
+
+    // Apply only v1 schema (the SCHEMA_SQL block) — easiest is to call initializeSchema which runs migrations all the way.
+    // To test the migration in isolation, we instead bypass and write the rows BEFORE the unique index is added.
+    // Trick: drop the unique index after init, insert dup rows, then re-run migration manually.
+    initializeSchema(legacy);
+    legacy.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search_vec USING vec0(entity_id TEXT PRIMARY KEY, embedding float[384]);`);
+    legacy.exec('DROP INDEX IF EXISTS idx_items_chat_id');
+
+    legacy.prepare(`INSERT INTO items (id, title, item_type, content, chat_id, message_count, created_at) VALUES ('old', 't', 'chat', 'old', 'dup', 5, '2026-05-01 00:00:00')`).run();
+    legacy.prepare(`INSERT INTO items (id, title, item_type, content, chat_id, message_count, created_at) VALUES ('new', 't', 'chat', 'new', 'dup', 8, '2026-05-02 00:00:00')`).run();
+
+    // Re-run the v2 migration logic (drops dup, adds unique index)
+    const { MIGRATIONS } = await import('../src/db/migrations.js');
+    MIGRATIONS.find(m => m.version === 2)!.fn(legacy);
+
+    const remaining = legacy.prepare("SELECT id FROM items WHERE chat_id = 'dup'").all() as Array<{ id: string }>;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).toBe('new'); // higher message_count wins
+
+    // Unique index now blocks future dupes
+    expect(() => {
+      legacy.prepare(`INSERT INTO items (id, title, item_type, content, chat_id) VALUES ('x', 't', 'chat', 'c', 'dup')`).run();
+    }).toThrow(/UNIQUE/);
+
+    legacy.close();
   });
 });

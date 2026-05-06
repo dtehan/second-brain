@@ -76,16 +76,16 @@ describe('Database Schema', () => {
     }).toThrow();
   });
 
-  it('records schema version', () => {
+  it('records schema version at the latest', () => {
     const row = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number };
-    expect(row.v).toBe(1);
+    expect(row.v).toBe(2);
   });
 
   it('is idempotent', () => {
-    // Running initializeSchema again should not fail
+    const before = db.prepare('SELECT COUNT(*) as n FROM schema_version').get() as { n: number };
     initializeSchema(db);
-    const row = db.prepare('SELECT COUNT(*) as n FROM schema_version').get() as { n: number };
-    expect(row.n).toBe(1); // Should not add a duplicate version row
+    const after = db.prepare('SELECT COUNT(*) as n FROM schema_version').get() as { n: number };
+    expect(after.n).toBe(before.n); // Re-running should not add another row
   });
 
   it('inserts and retrieves items with dedup fields', () => {

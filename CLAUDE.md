@@ -3,7 +3,7 @@
 ## Overview
 
 brain2 is a database-first personal knowledge management system with a local MCP server.
-All data lives in SQLite at `data/brain2.db`. Claude accesses it via 28 MCP tools.
+All data lives in SQLite at `data/brain2.db`. Claude accesses it via 29 MCP tools.
 
 ## Quick Reference
 
@@ -50,7 +50,9 @@ npx tsc --noEmit              # Type-check
 ### Key Conventions
 - People are identified by `name` (unique). Use `brain_upsert_person` — it merges without overwriting existing non-null fields.
 - Accounts use `account_contacts` for team roles, not hardcoded columns.
-- Dedup via `email_message_id`, `chat_id`, `calendar_event_id`, or `fingerprint`.
+- Dedup via `email_message_id`, `chat_id`, `calendar_event_id`, or `fingerprint`. All four are UNIQUE (chat_id and calendar_event_id are partial unique indexes — multiple NULLs allowed).
+- `brain_ingest_email` / `brain_ingest_chat` / `brain_ingest_meeting` are idempotent on their dedup key: re-ingesting returns the existing id and updates the row in place. For chat, an incoming `message_count` lower than the stored one is silently skipped (returned `action: "skipped"`) to guard against out-of-order replays.
+- Cleanup: `brain_merge_items(keep_id, drop_id)` re-targets every reference to `drop_id` (item_people, edges, todos, syntheses, search indexes) and deletes the row. Use it for any duplicates left behind by the pre-v2 ingest path.
 - All content is searchable via `brain_search` (hybrid FTS5 + vector similarity).
 
 ### Skills

@@ -10,6 +10,7 @@ import { registerGraphTools } from './tools/graph.js';
 import { registerSynthesisTools } from './tools/synthesis.js';
 import { registerStatsTools } from './tools/stats.js';
 import { registerWatermarkTools } from './tools/watermark.js';
+import { registerAdminTools } from './tools/admin.js';
 import { registerPrompts } from './prompts.js';
 
 export function createServer(): McpServer {
@@ -30,6 +31,7 @@ export function createServer(): McpServer {
   registerSynthesisTools(server, db);
   registerStatsTools(server, db);
   registerWatermarkTools(server, db);
+  registerAdminTools(server, db);
 
   // Register skill prompts (available in Claude Desktop via / menu)
   registerPrompts(server);
