@@ -1,7 +1,10 @@
+---
+name: brain-note
+description: Files user-provided meeting notes by matching them against the M365 calendar (±2 day window), then ingesting the meeting with deduplication and clean person-name handling. Use whenever the user asks to "file my notes", "process my notes", "match notes to meetings", "file meeting notes", "/brain-note", or pastes raw meeting notes asking that they be filed against a calendar event.
+---
+
 # Note Filing Skill
 ## User Notes → Calendar Match → brain2 Database
-
-Invoke when asked to: "file my notes", "process my notes", "match notes to meetings", or "file meeting notes".
 
 ---
 

@@ -96,13 +96,10 @@ src/
   prompts.ts                 Registers skills as MCP prompts for Claude Desktop
 
 skills/                      Skill prompts (MCP prompts + Claude Code skills)
-  email-ingestion.md         M365 email → brain2 pipeline
-  chat-ingestion.md          Teams chat → brain2 pipeline
-  note-filing.md             User notes → calendar match → brain2
-  dreaming.md                Connection building and syntheses
-  lint.md                    Database maintenance checklist
-  digest.md                  Daily morning briefing
-  skill-extraction.md        Extract reusable knowledge from work sessions
+  brain-sync.md              Sync M365 → brain2 (email + chat) + dream + lint
+  brain-day.md               Daily prep brief
+  brain-note.md              File user notes to calendar meetings
+  brain-extract.md           Extract reusable knowledge from work sessions
 ```
 
 ## Skills
@@ -111,35 +108,10 @@ Skills are available as **MCP prompts** in Claude Desktop (via the `/` menu) and
 
 | Skill | Description |
 |---|---|
-| `email-ingestion` | Fetch M365 emails and file them to brain2 |
-| `chat-ingestion` | Fetch Microsoft Teams chats and file them to brain2 |
-| `note-filing` | File user notes by matching them to calendar meetings |
-| `dreaming` | Incremental connection building — entities, summaries, themes |
-| `lint` | Database maintenance checklist — data quality, stale items |
-| `digest` | Daily morning briefing — todos, meetings, stale accounts |
-| `skill-extraction` | Extract reusable knowledge from work sessions |
-
-## Automation
-
-### Ingestion (CronCreate — Claude Code session)
-
-These run inside Claude Code because they require the M365 MCP for email/calendar/Teams access. They are session-only and recreated at the start of each Claude Code session.
-
-| Job | Schedule | Description |
-|---|---|---|
-| Email ingestion | 6:43am weekdays | Fetch new emails from Done/Sent, dedup, ingest |
-| Chat ingestion | 6:47am weekdays | Fetch new Teams chats, dedup, ingest |
-| Database lint | 4:33pm Fridays | Data quality checks and maintenance report |
-
-### Daily Digest (shell cron)
-
-Runs via `crontab` at 7:03am weekdays, after ingestion completes:
-
-```
-3 7 * * 1-5 cd ~/Code/brain2 && claude --print --dangerously-skip-permissions -p "$(cat skills/digest.md)" >> ~/Code/brain2/digest.log 2>&1
-```
-
-Produces a morning briefing: overdue todos, upcoming meetings, stale accounts, ingestion status.
+| `brain-sync` | Sync M365 emails + Teams chats with verification, then dream + lint |
+| `brain-day` | Daily prep brief — meetings with account context + overdue todos |
+| `brain-note` | File user notes by matching them to calendar meetings |
+| `brain-extract` | Extract reusable knowledge from work sessions |
 
 ## Data Model
 

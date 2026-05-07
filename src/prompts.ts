@@ -5,13 +5,10 @@ import { join, basename } from 'node:path';
 const SKILLS_DIR = join(import.meta.dirname, '..', 'skills');
 
 const DESCRIPTIONS: Record<string, string> = {
-  'chat-ingestion': 'Fetch Microsoft Teams chats and file them to brain2',
-  'digest': 'Daily morning briefing — todos, meetings, stale accounts, ingestion status',
-  'dreaming': 'Incremental connection building — entities, summaries, themes, connections',
-  'email-ingestion': 'Fetch M365 emails and file them to brain2',
-  'lint': 'Database maintenance checklist — data quality, stale items',
-  'note-filing': 'File user notes by matching them to calendar meetings',
-  'skill-extraction': 'Extract reusable knowledge from work sessions into new skills',
+  'brain-day': 'Daily prep brief — meetings with account context + overdue todos for today, tomorrow, or a named weekday',
+  'brain-extract': 'Extract reusable knowledge from work sessions into new skills',
+  'brain-note': 'File user notes by matching them to calendar meetings',
+  'brain-sync': 'Sync M365 emails and Teams chats to brain2, with verification, then dream and lint',
 };
 
 export function registerPrompts(server: McpServer): void {

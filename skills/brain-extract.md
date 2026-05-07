@@ -1,7 +1,11 @@
+---
+name: brain-extract
+description: Extracts reusable knowledge from a Claude session into a new skill (or updates an existing one) â€” only when the discovery is reusable, non-trivial, specific, and verified. Applies a four-part quality gate before extracting and prefers updating an existing skill over creating a duplicate. Use whenever the user asks to "extract a skill", "save this as a skill", "what did we learn?", "/brain-extract", or at the end of a session that involved non-obvious debugging, misleading errors, tool/MCP quirks, workflow optimizations, or new brain2 conventions worth preserving.
+---
+
 # Skill Extraction
 ## Extract Reusable Knowledge from Work Sessions
 
-Invoke when asked to: "extract a skill", "save this as a skill", "what did we learn?", or "/skill-extraction".
 Also invoke at the end of sessions that involved non-obvious debugging, trial-and-error discovery, or novel workflow creation.
 
 ---
@@ -136,7 +140,7 @@ Only do this for knowledge that genuinely affects future conversation behavior â
 
 ## Retrospective Mode
 
-When invoked at the end of a session (`/skill-extraction` or "what did we learn?"):
+When invoked at the end of a session (`/brain-extract` or "what did we learn?"):
 
 1. Review the conversation for extractable knowledge
 2. List candidates with one-line justifications

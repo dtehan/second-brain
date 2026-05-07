@@ -60,29 +60,11 @@ npx tsc --noEmit              # Type-check
 
 | File | Purpose |
 |---|---|
-| `email-ingestion.md` | M365 email → brain2 pipeline with watermarks and dedup |
-| `chat-ingestion.md` | Teams chat → brain2 pipeline with watermarks and dedup |
-| `note-filing.md` | User notes → calendar match → brain2 |
-| `dreaming.md` | Incremental connection building, syntheses, and themes |
-| `lint.md` | Database maintenance checklist (data quality, stale items, Teams messages) |
-| `skill-extraction.md` | Extract reusable knowledge from work sessions into new skills |
-| `digest.md` | Daily morning briefing (todos, meetings, stale accounts, ingestion status) |
+| `brain-sync.md` | Sync M365 emails + Teams chats with verification, then dream + lint |
+| `brain-day.md` | Daily prep brief — meetings (with account context) + overdue todos for today, tomorrow, or a named weekday |
+| `brain-note.md` | File user notes by matching them to calendar meetings |
+| `brain-extract.md` | Extract reusable knowledge from work sessions into new skills |
 
-### Daily Ingestion (CronCreate)
+### Invocation model
 
-Ingestion runs via **CronCreate** (Claude Code session jobs), because it requires the M365 MCP which is only available in Claude Desktop.
-
-**Session start:** At the start of every new Claude Code session in this repo, run `CronList` and recreate any missing jobs. All jobs auto-expire after 7 days and are session-only.
-
-| Job | Schedule | Skill |
-|---|---|---|
-| Email ingestion | `43 6 * * 1-5` (6:43am weekdays) | `skills/email-ingestion.md` |
-| Chat ingestion | `47 6 * * 1-5` (6:47am weekdays) | `skills/chat-ingestion.md` |
-| Database lint | `33 16 * * 5` (4:33pm Fridays) | `skills/lint.md` |
-
-### Daily Digest (shell cron)
-
-Cron (7:03am weekdays, shell — runs after ingestion):
-```
-3 7 * * 1-5 cd ~/Code/brain2 && claude --print --dangerously-skip-permissions -p "$(cat skills/digest.md)" >> ~/Code/brain2/digest.log 2>&1
-```
+All skills are invoked manually from Claude Desktop (where the brain2 and M365 MCPs are configured). There are no scheduled jobs — `brain-sync` is run when the user wants to catch up the brain, `brain-day` when they want a day brief, `lint` when they want maintenance, etc.
