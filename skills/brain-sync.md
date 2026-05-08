@@ -1,282 +1,184 @@
 ---
 name: brain-sync
-description: Incrementally syncs Microsoft 365 emails and Teams chats into the brain2 second brain since the last watermark, then runs dreaming (synthesis + graph connections) and a database lint. Use whenever the user asks to "sync the brain", "ingest new emails/chats", "catch up the second brain", "run a brain sync", "update second brain", or any equivalent phrasing. The skill enforces complete pagination (NOT just the last 10 items), explicit verification that every email and chat since the watermark was processed, then triggers dreaming and lints the database for consistency.
+description: "Incrementally syncs Microsoft 365 emails and Teams chats into the brain2 second brain since the last watermark, then runs dreaming (synthesis + graph connections) and a database lint. Use whenever the user asks to \"sync the brain\", \"ingest new emails/chats\", \"catch up the second brain\", \"run a brain sync\", \"update second brain\", or any equivalent phrasing. Paginates fully, trusts the watermark for dedup on the interior, classifies noise so it isn't summarised, and stays quiet — final summary only."
 ---
 
 <role>
-You are a meticulous second-brain sync agent. Your job is to walk three watermarks (email_done, email_sent, chat) forward to "now" with ZERO gaps, then dream connections, then lint.
-
-The user has been burned before by a sync that silently stopped at 10 items. Your prime directive is: **fully paginate, then prove you got everything.**
+Sync agent. Walk three watermarks (email_done, email_sent, chat) forward to "now" with zero gaps. Be fast and quiet. Trust the watermark. Classify noise. Final summary only.
 </role>
 
 <critical_rules>
-1. **NEVER trust the default page size.** `outlook_email_search`, `outlook_calendar_search`, and `chat_message_search` default to small page sizes. ALWAYS set `limit` to the maximum (50 for Outlook, 100 for Teams) and ALWAYS paginate with `offset` until a page returns fewer than `limit` items.
-2. **NEVER advance a watermark until verification passes.** If verification finds a gap, fix the gap before moving on.
-3. **NEVER skip the dedup check.** Always call `brain_check_dedup` before `brain_ingest_email` / `brain_ingest_chat`.
-4. **NEVER run dreaming or lint until both email folders AND chat are fully synced AND verified.**
-5. If a tool call fails or times out mid-pagination, retry once. If it fails again, STOP, advance the watermark only as far as confirmed-ingested, and report the gap to the user.
+1. **Paginate to exhaustion.** Set `limit` to the max (50 Outlook, 100 Teams) and keep paging until a page is shorter than `limit` OR `moreResults: false`. Never stop early.
+2. **Watermark trust + boundary dedup.** Dedup-check only the FIRST item per source (the boundary). Items strictly newer than the watermark are new — skip per-item dedup. The DB unique constraint on message_id is the safety net if you're wrong.
+3. **Don't fetch bodies you don't need.** The search response already returns a `summary` field. Only call `read_resource` when the item is substantive (see triage rules below).
+4. **Don't advance watermarks until verification passes.**
+5. **Quiet by default.** No phase banners, no per-item confirmations, no intermediate tables. One final summary at the end (Phase 5e). If something fails, surface that immediately — but successes are silent.
 </critical_rules>
 
 <phases>
-The skill runs five phases in order. Do NOT skip ahead. Announce each phase before starting it.
-
-## Phase 1 — Read all watermarks
-## Phase 2 — Ingest (email_done → email_sent → chat)
-## Phase 3 — Verify (re-query each source; counts must match)
-## Phase 4 — Dream (synthesize + add edges)
-## Phase 5 — Lint (consistency checks + final report)
+1. Read watermarks
+2. Ingest (email_done → email_sent → chat) with triage
+3. Verify (re-query each source; counts match)
+4. Dream (edges + syntheses)
+5. Lint + final report
 </phases>
 
 ---
 
-## Phase 1 — Read all watermarks
+## Phase 1 — Read watermarks
 
-Call `brain_list_watermarks` once. From the result, extract `last_timestamp` for each of:
-- `email_done` (Inbox / received)
-- `email_sent` (Sent Items)
-- `chat` (Teams chat)
-
-If a watermark is missing for a source, default to **48 hours ago** and tell the user you're using a 48h fallback for that source.
-
-Display a small table to the user:
-
-```
-| Source     | Last watermark           | Hours behind |
-|------------|--------------------------|--------------|
-| email_done | 2026-05-05T14:22:00Z     | 17.2         |
-| email_sent | 2026-05-05T18:01:00Z     | 13.6         |
-| chat       | 2026-05-04T09:15:00Z     | 46.4         |
-```
-
-Then proceed to Phase 2 without asking for confirmation — this is a routine sync.
+Call `brain_list_watermarks` once. Extract `last_timestamp` for `email_done`, `email_sent`, `chat`. Default to 48h ago if missing. **Do not display a table.** Move on.
 
 ---
 
 ## Phase 2 — Ingest
 
-For each source in this exact order: `email_done`, `email_sent`, `chat`.
+For each source in order: `email_done`, `email_sent`, `chat`.
 
-### 2a. email_done (Inbox)
+### Triage rules — applied to every email BEFORE deciding whether to fetch the body
 
-**Pagination loop — this is where past syncs failed. Follow it exactly:**
+Classify each search result by sender + subject. Three buckets:
+
+- **Skip body, ingest as one-line stub.** Calendar accepts/declines (subject starts with "Accepted:", "Declined:", "Tentative:"), expense approvals (Oracle workflow senders), Aha! notifications (`*aha.io`), Microsoft Engage daily digests, marketing newsletters (subscription@*, unsubscribe footers), automated build/CI mailers. Stub = subject + sender + 1-line description. No `read_resource`.
+- **Skip body, ingest with a short context line.** Personal emails (recipient = a personal address you recognise — spouse, family). Note "personal: <subject>" and move on. No `read_resource`.
+- **Fetch the body.** Everything else. Call `read_resource`, build a 3-6 sentence summary covering subject, who, key asks, action item.
+
+If you can't classify confidently, fetch — false negatives on triage cost more than the extra read.
+
+### 2a + 2b. Email loops (Inbox + Sent Items)
 
 ```
 offset = 0
-PAGE_SIZE = 50          # MAX for outlook_email_search. Never lower this.
 collected = []
-
 loop:
-    result = outlook_email_search(
-        afterDateTime = email_done_watermark,
-        folderName    = "Inbox",
-        limit         = 50,             # ALWAYS 50, not 10
-        offset        = offset,
-        # IMPORTANT: do NOT pass `query` — empty/wildcard query means "all emails"
-    )
-    page = result.emails (or whatever the array is named)
-
+    page = outlook_email_search(afterDateTime=watermark, folderName=<Inbox|Sent Items>, limit=50, offset=offset)
     if page is empty: break
     collected.extend(page)
-
-    if len(page) < 50: break    # last page reached
+    if len(page) < 50: break
     offset += 50
-
-    if offset > 1000:           # offset cap from the API
-        warn user, switch to date-window strategy (see below)
-        break
+    if offset > 1000: split date window, recurse, dedup by id
 ```
 
-**Date-window fallback (only if offset cap is hit):**
-If the watermark is so old that >1000 emails have arrived since, split the time window in half and recurse: query `[watermark, midpoint]` and `[midpoint, now]` separately. Merge results, dedup by `email_message_id`.
+Then for each email:
+1. Apply triage (above).
+2. **Dedup only on the first item.** If the first item's `id` matches the watermark's `last_id`, skip it. For all subsequent items, skip per-item dedup — they're guaranteed new by the watermark. (If a 23505 / unique-violation comes back from `brain_ingest_email`, log and continue — don't crash.)
+3. Build content (stub line OR full summary depending on triage).
+4. Identify account by sender domain if present in `brain_list_accounts`.
+5. Call `brain_ingest_email`. Track latest timestamp.
 
-**For each collected email:**
-1. Call `read_resource` with the email's `mail:///messages/{id}` URI to get the full body. (Search results return metadata only.)
-2. Call `brain_check_dedup(email_message_id=<id>)`. If it returns "exists", skip (this email is already in the brain — log it but don't re-ingest).
-3. Build a markdown summary of the email (subject, from, to, key points from body — 3-6 sentences max).
-4. Extract contact info from the signature if present (name, email, phone, title).
-5. Identify the account if this is a customer email (cross-reference sender domain against `brain_list_accounts`).
-6. Call `brain_ingest_email(folder="done", ...)` with the summary, participants, contact_info, account, conversation_id, email_message_id, date.
-7. Track the latest `receivedDateTime` seen.
+Folder is `done` for Inbox, `sent` for Sent Items.
 
-**After the loop:** record `count_done_ingested` and `latest_done_timestamp`. **Do NOT advance the watermark yet** — Phase 3 verifies first.
-
-### 2b. email_sent (Sent Items)
-
-Identical to 2a, except `folderName = "Sent Items"` and `folder = "sent"` in `brain_ingest_email`. Track `count_sent_ingested` and `latest_sent_timestamp`.
-
-### 2c. chat (Teams)
-
-`chat_message_search` requires a `query` (it's a search endpoint, not a list endpoint). Use the wildcard-style query `"*"` if accepted; otherwise iterate with a broad query like `"a OR e OR i OR o OR u"` (vowel hack for "all messages"). If neither works, ask the user once for guidance.
+### 2c. Chat (Teams)
 
 ```
 offset = 0
-PAGE_SIZE = 100         # MAX for chat_message_search
 collected = []
-
 loop:
-    result = chat_message_search(
-        query           = "*",
-        afterDateTime   = chat_watermark,
-        limit           = 100,
-        offset          = offset,
-    )
-    page = result.messages
-    if page is empty: break
+    page = chat_message_search(query="*", afterDateTime=watermark, limit=100, offset=offset)
+    if page is empty or moreResults=false on last item: break
     collected.extend(page)
     if len(page) < 100: break
     offset += 100
 ```
 
-**Group messages into threads by `chatId` before ingesting.** Each `brain_ingest_chat` call represents one thread, not one message. For each chat thread:
+**Group by chatId in memory while iterating** — don't dump to a file or re-loop. One pass:
 
-1. Identify all messages in this thread within the page set.
-2. Call `brain_check_dedup(chat_id=<chatId>)`. If exists with the same `message_count`, skip — nothing new. If the new count is higher (or no existing record), proceed to ingest. `brain_ingest_chat` is idempotent on `chat_id`: it will return the same id and update the row in place. (If your incoming `message_count` is lower than what's stored, the call returns `action: "skipped"` — log it as an out-of-order replay.)
-3. Build a markdown summary covering: subject/topic, participants, message count, key decisions or action items, latest activity.
-4. Identify the account if it's a customer chat.
-5. Call `brain_ingest_chat` with chat_id, content, date (most recent message), message_count, participants, subject, account.
+```
+threads = {}
+for msg in collected:
+    threads.setdefault(msg.chatId, []).append(msg)
+```
 
-Track `count_chat_threads_ingested` and `latest_chat_timestamp`.
+For each `chatId`:
+1. Boundary dedup: if `chatId` matches the watermark's `last_id` AND latest message timestamp == watermark, skip.
+2. Otherwise call `brain_ingest_chat` (idempotent on chat_id — it updates in place). Pass `message_count = len(threads[chatId])` for THIS run; the brain stores it as the count for this thread within this sync window. Don't try to merge across runs.
+3. For substantive customer threads: 4-8 sentence summary covering topic, key decisions, action items. For meeting backchannels, drops/regrets, and brief coordination: one or two lines. **Same triage spirit as emails.**
+4. Account assignment if recognisable from participant emails or topic.
 
 ---
 
-## Phase 3 — Verify (mandatory)
+## Phase 3 — Verify
 
-This phase exists because of the historical "only got 10" failure mode. Do NOT skip it.
+For each source, re-query with the original watermark and count. Pass criteria: `verify_count >= ingested_count`. Count may be slightly higher (items arrived during run) — fine. If verify count is LOWER than ingested, something's wrong; investigate before advancing.
 
-### For each source, run a verification re-query:
-
+If pass:
 ```
-verify_result = outlook_email_search(
-    afterDateTime = original_watermark,
-    folderName    = "Inbox" or "Sent Items",
-    limit         = 50,
-    offset        = 0,
-)
+brain_set_watermark(source=..., last_timestamp=<latest_seen>, last_id=<id of latest>)
 ```
 
-Then paginate that verify query the same way as Phase 2. Count items.
-
-**Pass criteria for a source:**
-- `verify_count >= ingested_count + dedup_skipped_count` (verify count may be slightly higher if new items arrived during ingest — that is expected and benign)
-- AND every `email_message_id` from the verify result either exists in the ingested set, the dedup-skipped set, or has a timestamp newer than `latest_done_timestamp` (i.e. arrived during the run — these will be picked up next sync).
-
-**If verify FAILS for a source:**
-- Identify the missing `email_message_id`s.
-- Re-fetch and ingest them.
-- Re-run verification.
-- If it fails twice, STOP and report which IDs are missing. Do NOT advance the watermark for that source.
-
-**On verification success, advance the watermark:**
-```
-brain_set_watermark(
-    source         = "email_done" | "email_sent" | "chat",
-    last_timestamp = latest_<source>_timestamp,
-    last_id        = id of latest item processed,
-)
-```
-
-Show the user a verification table:
-
-```
-| Source     | Ingested | Dedup-skipped | Verify count | Status |
-|------------|----------|---------------|--------------|--------|
-| email_done | 23       | 4             | 27           | ✅      |
-| email_sent | 8        | 1             | 9            | ✅      |
-| chat       | 5 threads| 2             | 7            | ✅      |
-```
+Don't display the verification table unless something failed.
 
 ---
 
 ## Phase 4 — Dream
 
-Only run if Phase 3 fully passed for all three sources.
+Only if Phase 3 passed for all three sources.
 
-For the items ingested in this run (track their entity IDs from the ingest tool returns):
+### 4a. Edges (only the high-signal ones)
+For each ingested item:
+- `item --about--> account` if account assigned (confidence 1.0)
+- `item --mentions--> person` for explicit @mentions and signature contacts (confidence 1.0)
+- `item --follows_up--> item` if conversation_id matches an existing item (confidence 1.0)
 
-### 4a. Add explicit edges
-For each ingested email/chat, add edges based on what's already in the content:
-- `item --mentions--> person` for every named person you can resolve via `brain_list_people` or `brain_search`.
-- `item --about--> account` if the item has an account assignment.
-- `item --follows_up--> item` if this email/chat references an earlier thread (use conversation_id; if a previous item shares the conversation_id, link them).
-- `person --works_at--> account` if a signature reveals a new employment fact.
+Skip inferred edges on a normal sync — they're noise. Add them in a dedicated dreaming pass if asked.
 
-Use `confidence = 1.0` for explicit edges (named in the content), `< 1.0` for inferred ones.
+### 4b. Syntheses
+Run only the ones that have enough signal:
+- `weekly_digest` for the current ISO week — always.
+- `person_summary` only for people who appeared in **3+ ingested items** this run.
+- `account_health` only for accounts touched by **2+ ingested items** this run.
+- `connection_discovery` only if you actually noticed a non-obvious connection. Skip otherwise — don't manufacture.
 
-### 4b. Save syntheses
-Run these in order, one tool call each:
-
-1. **weekly_digest** — scope = current ISO week (e.g. `2026-W19`). Title: "Week of {Monday date}". Content: themes across all items ingested this run, key people, key accounts, open threads, decisions made.
-2. **person_summary** — for each person who appeared in 3+ ingested items this run, save/refresh their summary. Scope = person entity ID.
-3. **account_health** — for each account touched by 2+ ingested items this run, save/refresh health. Scope = account entity ID.
-4. **connection_discovery** — scope = `sync-{ISO timestamp}`. Title: "Connections from {date} sync". Content: non-obvious connections you noticed (e.g. two unrelated accounts both asking about the same thing; a person who showed up in both a customer email and an internal chat). Skip this synthesis if you found no non-obvious connections — don't manufacture them.
-
-For each synthesis, pass `source_ids` listing the entity IDs that fed it.
+Pass `source_ids` on every synthesis.
 
 ---
 
-## Phase 5 — Lint
+## Phase 5 — Lint + report
 
-### 5a. Read database stats
-Call `brain_stats`. Note: total entities, total edges, last-activity timestamps.
+1. `brain_stats` — note totals.
+2. `brain_list_watermarks` — confirm advances landed (within seconds of what Phase 3 set).
+3. `brain_set_watermark(source="dreaming", last_timestamp=<now>)` — always advance after dreaming.
+4. Spot-check 3 random ingested items via `brain_check_dedup` — must all return exists.
 
-### 5b. Watermark consistency check
-Call `brain_list_watermarks`. For each source, confirm `last_timestamp` is now within seconds of what Phase 3 set. If not, the watermark write failed silently — re-issue.
-
-### 5c. Compare watermarks to recent activity
-- The `dreaming` watermark should now be ≤ 60 seconds old (you just dreamt). If not, set it: `brain_set_watermark(source="dreaming", last_timestamp=<now>)`.
-- email_done, email_sent, chat watermarks should all be within ~2 minutes of "now" minus the time emails/chats might have arrived during the run. If a watermark is more than 24h old after a successful sync, something is wrong — flag it.
-
-### 5d. Dedup spot-check
-Pick 3 random items ingested in this run. Call `brain_check_dedup` on each. Each must report "exists". If any reports "not found", an ingest succeeded silently without persisting — flag it.
-
-### 5e. Final report
-Display a summary:
+### Final report (this is the ONLY output the user sees)
 
 ```
 ## Brain Sync Complete
 
-**Ingested**
-- Emails (received): 23
-- Emails (sent): 8
-- Chat threads: 5
-- Dedup-skipped: 7
+Ingested
+- Inbox: N (M stubbed as noise)
+- Sent: N (M stubbed)
+- Chat threads: N
 
-**Dreaming**
-- Edges added: 47
-- Syntheses saved: 6 (1 weekly digest, 3 person summaries, 1 account health, 1 connection discovery)
+Dreaming
+- Edges: N
+- Syntheses: weekly_digest + N person summaries + N account health + (connection_discovery | none)
 
-**Watermarks advanced to**
-- email_done: 2026-05-06T21:58:14Z
-- email_sent: 2026-05-06T21:55:02Z
-- chat: 2026-05-06T21:59:41Z
-- dreaming: 2026-05-06T22:01:33Z
+Watermarks
+- email_done → <ts>
+- email_sent → <ts>
+- chat → <ts>
+- dreaming → <ts>
 
-**Database state**
-- Total items: 4,217 (+36)
-- Total edges: 12,448 (+47)
-- Lint: ✅ all checks passed
-
-**Anything unusual:** {none / list issues}
+Lint: ✅ | issues: <list>
 ```
 
 ---
 
 <failure_modes>
-Common ways this skill has failed before. Watch for these:
-
-- **Truncated page**: search returned exactly 10 items and you didn't paginate. ALWAYS check `len(page) < limit` before exiting the loop, never trust the absence of a "hasMore" flag.
-- **Silent watermark advance**: advanced the watermark before verifying, then verification failed but the next run skipped the gap. NEVER advance before verify.
-- **Dedup race**: two runs in quick succession may both ingest the same item before either persists. If `brain_check_dedup` says "not found" but you suspect duplication, search by subject + date.
-- **Empty `query` rejected**: some chat_message_search backends reject empty queries. Use `"*"` first; fall back to a broad-vowel query.
-- **Offset > 1000 cap**: split the date window and recurse rather than giving up.
-- **Synthesis without sources**: never call `brain_save_synthesis` without `source_ids` populated — it makes the graph un-auditable.
+- **Truncated page**: always check `len(page) < limit` AND `moreResults` before exiting.
+- **Watermark advanced before verify**: never. Verify first.
+- **Body fetch on noise**: triage first. A daily digest doesn't need a 3000-token body.
+- **Per-item dedup on the interior**: don't. Trust the watermark; rely on DB unique constraint as a backstop.
+- **Loud narration**: phase banners and per-item confirmations make a sync feel like it's grinding. Stay silent until the final report.
+- **Manufactured syntheses**: skip syntheses without enough signal rather than padding the run.
 </failure_modes>
 
 <output_style>
-- Announce each phase before starting it ("**Phase 2 — Ingesting…**").
-- Show progress as concise running counts, not every individual item.
-- Tables for the watermark read (Phase 1) and the verification result (Phase 3) and the final report (Phase 5e).
-- If the user interrupts mid-run, summarize where you stopped and which watermarks are/aren't advanced.
+- No phase banners ("**Phase 2 — Ingesting…**"). Internal only.
+- No tables for watermarks read or counts in progress. The final report is the only structured output.
+- If a tool fails, surface it immediately and concisely. Successes are silent.
+- If interrupted, summarise where you stopped and which watermarks are/aren't advanced.
 </output_style>
 
-Version 1.0 — built 2026-05-06
+Version 2.0 — built 2026-05-08. Predecessor (v1.0) was correct but slow: ~150 tool calls and a wall of narration per run. v2.0 cuts that to ~40-60 calls by trusting the watermark, triaging noise without body fetches, and going quiet until the end.
