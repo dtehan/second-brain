@@ -45,19 +45,20 @@ Classify each search result by sender + subject. Three buckets:
 
 If you can't classify confidently, fetch — false negatives on triage cost more than the extra read.
 
-### 2a + 2b. Email loops (Inbox + Sent Items)
+### 2a & 2b Email loops (Inbox + Sent Items + Done "1. Done" folder)
 
 ```
 offset = 0
 collected = []
 loop:
-    page = outlook_email_search(afterDateTime=watermark, folderName=<Inbox|Sent Items>, limit=50, offset=offset)
+    page = outlook_email_search(afterDateTime=watermark, folderName=<Inbox|Sent Items| 1. Done>, limit=50, offset=offset)
     if page is empty: break
     collected.extend(page)
     if len(page) < 50: break
     offset += 50
     if offset > 1000: split date window, recurse, dedup by id
 ```
+
 
 Then for each email:
 1. Apply triage (above).
