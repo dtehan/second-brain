@@ -60,7 +60,7 @@ npx tsc --noEmit              # Type-check
 
 | File | Purpose |
 |---|---|
-| `brain-sync.md` | Sync M365 emails + Teams chats with verification, then dream + lint |
+| `brain-sync.md` | Sync M365 emails with verification, then dream + lint (Teams chat unavailable — chat_message_search times out) |
 | `brain-day.md` | Daily prep brief — meetings (with account context) + overdue todos for today, tomorrow, or a named weekday |
 | `brain-note.md` | File user notes by matching them to calendar meetings |
 | `brain-extract.md` | Extract reusable knowledge from work sessions into new skills |

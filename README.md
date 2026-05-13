@@ -9,10 +9,9 @@ Replaces an earlier Obsidian vault-based system with structured storage, semanti
 - **Unified knowledge store** — meetings, emails, chats, notes, people, accounts, projects, todos, ideas, and resources in one database
 - **Knowledge graph** — flexible edges between any entities (mentions, related_to, attended, about, etc.)
 - **Hybrid search** — FTS5 full-text search + sqlite-vec vector similarity (384-dim, all-MiniLM-L6-v2)
-- **Watermark-based ingestion** — incremental M365 email and Teams chat sync with dedup
-- **Dreaming** — automated connection building, person summaries, account health assessment, and theme discovery
-- **Daily digest** — morning briefing with overdue todos, upcoming meetings, stale accounts, and ingestion status
-- **Database lint** — weekly data quality checks and maintenance
+- **Watermark-based ingestion** — incremental M365 email sync with dedup (Teams chat sync currently unavailable)
+- **Dreaming** — connection building, person summaries, account health assessment, and theme discovery — runs at the end of each sync
+- **Daily digest** — morning briefing with meetings (account context, open threads, heads-up) and overdue todos
 
 ## Requirements
 
@@ -60,7 +59,7 @@ npm test                      # Run tests
 npx tsc --noEmit              # Type-check
 ```
 
-Once the server is running, Claude can use all 28 tools and 7 skill prompts through natural conversation:
+Once the server is running, Claude can use all 29 tools and 4 skill prompts through natural conversation:
 
 - *"What's happening with the Dell account?"* — searches items, gets account profile and contacts
 - *"Process my emails"* — runs the email ingestion pipeline
@@ -108,7 +107,7 @@ Skills are available as **MCP prompts** in Claude Desktop (via the `/` menu) and
 
 | Skill | Description |
 |---|---|
-| `brain-sync` | Sync M365 emails + Teams chats with verification, then dream + lint |
+| `brain-sync` | Sync M365 emails with verification, then dream + lint (Teams chat unavailable) |
 | `brain-day` | Daily prep brief — meetings with account context + overdue todos |
 | `brain-note` | File user notes by matching them to calendar meetings |
 | `brain-extract` | Extract reusable knowledge from work sessions |
