@@ -20,21 +20,22 @@ export function registerSynthesisTools(server: McpServer, db: Database.Database)
     async ({ synthesis_type, scope, title, content, source_ids, expires_at }) => {
       const id = generateId();
 
-      // Mark previous synthesis of same type+scope as superseded
+      // Find previous synthesis of same type+scope to supersede
       const previous = db.prepare(`
         SELECT id FROM syntheses
         WHERE synthesis_type = ? AND scope = ? AND superseded_by IS NULL
         ORDER BY created_at DESC LIMIT 1
       `).get(synthesis_type, scope) as { id: string } | undefined;
 
-      if (previous) {
-        db.prepare('UPDATE syntheses SET superseded_by = ? WHERE id = ?').run(id, previous.id);
-      }
-
+      // Insert new row first so the FK reference is valid before updating the old row
       db.prepare(`
         INSERT INTO syntheses (id, synthesis_type, scope, title, content, source_ids, expires_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(id, synthesis_type, scope, title, content, source_ids ? JSON.stringify(source_ids) : null, expires_at ?? null);
+
+      if (previous) {
+        db.prepare('UPDATE syntheses SET superseded_by = ? WHERE id = ?').run(id, previous.id);
+      }
 
       return { content: [{ type: 'text' as const, text: JSON.stringify({ id, synthesis_type, scope, supersedes: previous?.id }) }] };
     }
