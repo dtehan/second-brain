@@ -70,14 +70,12 @@ Determine what form the extracted knowledge should take:
 
 ### 3. Draft the Skill
 
-Use the brain2 skill format:
+Use the brain2 skill format (frontmatter + body):
 
 ```markdown
-# Skill Title
-## One-line Description
-
-Invoke when asked to: "trigger phrase 1", "trigger phrase 2", or "/skill-name".
-
+---
+name: skill-name
+description: "One-line description. Use whenever the user asks to 'trigger phrase 1', 'trigger phrase 2', or '/skill-name'."
 ---
 
 ## Overview (if needed)
@@ -117,11 +115,11 @@ If the skill is brain2-specific (ingestion, dreaming, data modeling), add it to 
 Save a resource so the knowledge is searchable across sessions:
 
 ```
-brain_ingest_resource(
+brain_ingest_note(
   title='Skill: <name>',
   content='<1-2 sentence summary>. Trigger: <when to use>. Location: skills/<name>.md',
-  resource_type='skill',
-  tags=['skill', '<topic>']
+  note_type='resource',
+  topic='skill'
 )
 ```
 

@@ -71,30 +71,9 @@ Folder is `done` for Inbox, `sent` for Sent Items.
 
 ### 2c. Chat (Teams)
 
-```
-offset = 0
-collected = []
-loop:
-    page = chat_message_search(query="*", afterDateTime=watermark, limit=100, offset=offset)
-    if page is empty or moreResults=false on last item: break
-    collected.extend(page)
-    if len(page) < 100: break
-    offset += 100
-```
+**Known issue: `chat_message_search` times out on every call. Skip Phase 2c entirely.**
 
-**Group by chatId in memory while iterating** — don't dump to a file or re-loop. One pass:
-
-```
-threads = {}
-for msg in collected:
-    threads.setdefault(msg.chatId, []).append(msg)
-```
-
-For each `chatId`:
-1. Boundary dedup: if `chatId` matches the watermark's `last_id` AND latest message timestamp == watermark, skip.
-2. Otherwise call `brain_ingest_chat` (idempotent on chat_id — it updates in place). Pass `message_count = len(threads[chatId])` for THIS run; the brain stores it as the count for this thread within this sync window. Don't try to merge across runs.
-3. For substantive customer threads: 4-8 sentence summary covering topic, key decisions, action items. For meeting backchannels, drops/regrets, and brief coordination: one or two lines. **Same triage spirit as emails.**
-4. Account assignment if recognisable from participant emails or topic.
+Do not call `chat_message_search`. Do not advance the `chat` watermark. In the final report, note "Chat: skipped (M365 chat search unavailable)" instead of a count.
 
 ---
 
@@ -128,7 +107,7 @@ Run only the ones that have enough signal:
 - `weekly_digest` for the current ISO week — always.
 - `person_summary` only for people who appeared in **3+ ingested items** this run.
 - `account_health` only for accounts touched by **2+ ingested items** this run.
-- `connection_discovery` only if you actually noticed a non-obvious connection. Skip otherwise — don't manufacture.
+- `connection_discovery` only when a concrete, non-obvious link is present — e.g. two accounts sharing the same contact unexpectedly, a person who bridges two unrelated threads, or an item that reframes an older one. Specific trigger: you can name the entities and the relationship in one sentence. Skip if you can't; don't manufacture.
 
 Pass `source_ids` on every synthesis.
 
@@ -149,7 +128,7 @@ Pass `source_ids` on every synthesis.
 Ingested
 - Inbox: N (M stubbed as noise)
 - Sent: N (M stubbed)
-- Chat threads: N
+- Chat: skipped (M365 chat search unavailable) | N threads
 
 Dreaming
 - Edges: N
