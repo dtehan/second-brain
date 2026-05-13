@@ -59,7 +59,7 @@ npm test                      # Run tests
 npx tsc --noEmit              # Type-check
 ```
 
-Once the server is running, Claude can use all 29 tools and 4 skill prompts through natural conversation:
+Once the server is running, Claude can use all 26 tools and 4 skill prompts through natural conversation:
 
 - *"What's happening with the Dell account?"* — searches items, gets account profile and contacts
 - *"Process my emails"* — runs the email ingestion pipeline

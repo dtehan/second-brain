@@ -5,24 +5,6 @@ import { z } from 'zod';
 export function registerWatermarkTools(server: McpServer, db: Database.Database): void {
 
   server.tool(
-    'brain_get_watermark',
-    'Get the last-processed timestamp/ID for a source (email_done, email_sent, chat, dreaming)',
-    {
-      source: z.string().describe('Watermark source: email_done | email_sent | chat | dreaming'),
-    },
-    async ({ source }) => {
-      const row = db.prepare('SELECT source, last_timestamp, last_id, updated_at FROM watermarks WHERE source = ?').get(source) as {
-        source: string; last_timestamp: string | null; last_id: string | null; updated_at: string;
-      } | undefined;
-
-      if (!row) {
-        return { content: [{ type: 'text' as const, text: JSON.stringify({ source, exists: false, last_timestamp: null, last_id: null }) }] };
-      }
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ ...row, exists: true }) }] };
-    }
-  );
-
-  server.tool(
     'brain_set_watermark',
     'Update the watermark after successful processing',
     {

@@ -201,68 +201,6 @@ export function registerIngestTools(server: McpServer, db: Database.Database): v
     }
   );
 
-  // ── brain_ingest_chat ──
-  server.tool(
-    'brain_ingest_chat',
-    'Ingest a Teams chat with message_count for incremental updates',
-    {
-      subject: z.string().describe('Chat subject/topic'),
-      date: z.string().describe('ISO date of most recent message'),
-      content: z.string().describe('Chat summary (markdown)'),
-      participants: z.array(z.string()).describe('Chat participants'),
-      chat_id: z.string().describe('Teams chat ID for dedup'),
-      message_count: z.number().describe('Total messages in thread'),
-      account: z.string().optional().describe('Account name if customer chat'),
-    },
-    async ({ subject, date, content, participants, chat_id, message_count, account }) => {
-      const fingerprint = computeFingerprint(content);
-
-      let accountId: string | null = null;
-      if (account) {
-        const acc = db.prepare('SELECT id FROM accounts WHERE name = ?').get(account) as { id: string } | undefined;
-        if (acc) accountId = acc.id;
-      }
-
-      const existing = db.prepare('SELECT id, message_count FROM items WHERE chat_id = ?').get(chat_id) as { id: string; message_count: number | null } | undefined;
-
-      let id: string;
-      let action: 'created' | 'updated' | 'skipped';
-
-      if (existing) {
-        id = existing.id;
-        // Guard against out-of-order replays regressing the row.
-        if ((existing.message_count ?? 0) > message_count) {
-          action = 'skipped';
-        } else {
-          action = 'updated';
-          db.prepare(`
-            UPDATE items SET
-              title = ?, date = ?, content = ?, account_id = ?,
-              message_count = ?, fingerprint = ?
-            WHERE id = ?
-          `).run(subject, date, content, accountId, message_count, fingerprint, id);
-        }
-      } else {
-        id = generateId();
-        action = 'created';
-        db.prepare(`
-          INSERT INTO items (id, title, item_type, date, content, account_id, source, chat_id, message_count, fingerprint)
-          VALUES (?, ?, 'chat', ?, ?, ?, 'm365_chat', ?, ?, ?)
-        `).run(id, subject, date, content, accountId, chat_id, message_count, fingerprint);
-      }
-
-      const personIds = participants.map(name => ensurePerson(db, name));
-      linkItemPeople(db, id, personIds);
-
-      if (action !== 'skipped') {
-        updateSearchIndex(db, id, 'item', subject, content, date, []);
-        await updateVectorIndex(db, id, `${subject}\n${content}`);
-      }
-
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ id, subject, date, participants_count: participants.length, message_count, action }) }] };
-    }
-  );
-
   // ── brain_ingest_note ──
   server.tool(
     'brain_ingest_note',

@@ -3,7 +3,7 @@
 ## Overview
 
 brain2 is a database-first personal knowledge management system with a local MCP server.
-All data lives in SQLite at `data/brain2.db`. Claude accesses it via 29 MCP tools.
+All data lives in SQLite at `data/brain2.db`. Claude accesses it via 26 MCP tools.
 
 ## Quick Reference
 

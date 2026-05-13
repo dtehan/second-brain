@@ -65,7 +65,7 @@ Determine what form the extracted knowledge should take:
 | Type | When | Where to Store |
 |---|---|---|
 | **Skill** (reusable workflow) | Multi-step process that will recur | `skills/<name>.md` |
-| **Resource** (reference material) | Factual knowledge, API details, config recipes | brain2 via `brain_ingest_resource` |
+| **Resource** (reference material) | Factual knowledge, API details, config recipes | brain2 via `brain_ingest_note(note_type='resource')` |
 | **Both** | Workflow that also contains reference-worthy details | Skill file + resource for the reference parts |
 
 ### 3. Draft the Skill

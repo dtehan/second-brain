@@ -44,39 +44,4 @@ export function registerStatsTools(server: McpServer, db: Database.Database): vo
     }
   );
 
-  // ── brain_get_portfolio ──
-  server.tool(
-    'brain_get_portfolio',
-    'Get all accounts as a portfolio overview with health, platform, contacts by role, and last interaction date',
-    {},
-    async () => {
-      const accounts = db.prepare('SELECT id, name, health, platform, segment, arr FROM accounts ORDER BY name').all() as Array<{
-        id: string; name: string; health: string | null; platform: string | null; segment: string | null; arr: string | null;
-      }>;
-
-      const portfolio = accounts.map(acc => {
-        const contacts = db.prepare(`
-          SELECT p.name, ac.role
-          FROM account_contacts ac JOIN people p ON ac.person_id = p.id
-          WHERE ac.account_id = ?
-          ORDER BY ac.role
-        `).all(acc.id) as Array<{ name: string; role: string }>;
-
-        const lastInteraction = db.prepare(`
-          SELECT date, title, item_type FROM items WHERE account_id = ? ORDER BY date DESC LIMIT 1
-        `).get(acc.id) as { date: string; title: string; item_type: string } | undefined;
-
-        const interactionCount = (db.prepare('SELECT COUNT(*) as n FROM items WHERE account_id = ?').get(acc.id) as { n: number }).n;
-
-        return {
-          ...acc,
-          contacts,
-          last_interaction: lastInteraction ?? null,
-          interaction_count: interactionCount,
-        };
-      });
-
-      return { content: [{ type: 'text' as const, text: JSON.stringify(portfolio, null, 2) }] };
-    }
-  );
 }
