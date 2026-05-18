@@ -71,9 +71,40 @@ Folder is `done` for Inbox, `sent` for Sent Items.
 
 ### 2c. Chat (Teams)
 
-**Known issue: `chat_message_search` times out on every call. Skip Phase 2c entirely.**
+**`chat_message_search` is flaky — it times out intermittently but does succeed.** Always attempt it. If it times out, skip and note in the report. If it returns results, process them.
 
-Do not call `chat_message_search`. Do not advance the `chat` watermark. In the final report, note "Chat: skipped (M365 chat search unavailable)" instead of a count.
+```
+offset = 0
+collected = []
+loop:
+    page = chat_message_search(query="*", afterDateTime=watermark, limit=100, offset=offset)
+    if timeout/error: break (note failure, do not advance watermark)
+    if page is empty: break
+    collected.extend(page)
+    if len(page) < 100 OR moreResults == false: break
+    offset += 100
+```
+
+**Group messages by chatId** — each unique chatId is one thread. Do not ingest individual messages; ingest one note per thread using `brain_ingest_note`.
+
+**For each thread:**
+1. Collect all messages in the thread from the results (same chatId).
+2. Classify the thread:
+   - **Noise/skip**: purely logistical one-liners with no signal (e.g. "👍", "ok", "sounds good", single emoji reactions). Still count toward the watermark advance.
+   - **Substantive**: anything with content worth remembering — technical discussion, decisions, questions, customer signals, action items, shared links.
+3. For substantive threads, call `brain_ingest_note` with:
+   - `note_type`: `"note"`
+   - `title`: `"Teams Chat: <participants or topic> — <date>"`
+   - `content`: markdown summary covering who, what was discussed, key signals, action items, and verbatim snippets where they matter (e.g. a customer signal quote like "Uved is seemingly interested")
+   - If the thread is clearly about a known account, mention it in the content (no `account` field on notes, but include account name in the body for searchability).
+4. Track the latest `createdDateTime` and message `id` across all threads.
+
+**Verification:** Re-query with the original watermark. If result count >= ingested thread count, advance:
+```
+brain_set_watermark(source="chat", last_timestamp=<latest_seen>, last_id=<id of latest message>)
+```
+
+**If chat_message_search times out:** Do not advance the chat watermark. Note "Chat: skipped (timeout)" in the final report.
 
 ---
 
@@ -152,6 +183,8 @@ Lint: ✅ | issues: <list>
 - **Per-item dedup on the interior**: don't. Trust the watermark; rely on DB unique constraint as a backstop.
 - **Loud narration**: phase banners and per-item confirmations make a sync feel like it's grinding. Stay silent until the final report.
 - **Manufactured syntheses**: skip syntheses without enough signal rather than padding the run.
+- **Chat: ingesting individual messages**: never. One `brain_ingest_note` per thread, not per message.
+- **Chat: skipping on first timeout**: always attempt `chat_message_search`. It succeeds more often than not. Only skip if it errors/times out.
 </failure_modes>
 
 <output_style>
@@ -161,4 +194,4 @@ Lint: ✅ | issues: <list>
 - If interrupted, summarise where you stopped and which watermarks are/aren't advanced.
 </output_style>
 
-Version 2.0 — built 2026-05-08. Predecessor (v1.0) was correct but slow: ~150 tool calls and a wall of narration per run. v2.0 cuts that to ~40-60 calls by trusting the watermark, triaging noise without body fetches, and going quiet until the end.
+Version 2.1 — updated 2026-05-15. Chat (Phase 2c) now actively attempted: groups messages by chatId, ingests one `brain_ingest_note` per substantive thread, advances the chat watermark on success. Previous v2.0 skipped chat entirely due to perceived timeout reliability — empirically it works, so now it runs.

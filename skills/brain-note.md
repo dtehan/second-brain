@@ -64,7 +64,6 @@ calendar_event_id (from M365)
 
 - `brain_upsert_person(...)` for each attendee — include `email`, `phone`, and `title` if present in the note (e.g. from a signature or introduction line)
 - `brain_add_edge(item → account, 'about')` if customer meeting
-- `brain_add_todo(...)` for any action items found
 
 ### 6. Dedup Check
 
