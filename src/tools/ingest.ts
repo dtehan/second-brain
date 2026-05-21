@@ -49,8 +49,14 @@ function ensurePerson(db: Database.Database, rawName: string): string {
   }
 
   const id = generateId();
-  db.prepare('INSERT INTO people (id, name, company) VALUES (?, ?, ?)').run(id, name, company);
-  return id;
+  db.prepare('INSERT OR IGNORE INTO people (id, name, company) VALUES (?, ?, ?)').run(id, name, company ?? null);
+
+  // Re-select: handles the race where a parallel agent inserted first
+  const row = db.prepare('SELECT id FROM people WHERE name = ?').get(name) as { id: string };
+  if (company) {
+    db.prepare('UPDATE people SET company = COALESCE(company, ?) WHERE id = ?').run(company, row.id);
+  }
+  return row.id;
 }
 
 function linkItemPeople(db: Database.Database, itemId: string, personIds: string[]): void {

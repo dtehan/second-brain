@@ -1,10 +1,10 @@
 ---
 name: brain-sync
-description: "Incrementally syncs Microsoft 365 emails and Teams chats into the brain2 second brain since the last watermark, then runs dreaming (synthesis + graph connections) and a database lint. Use whenever the user asks to \"sync the brain\", \"ingest new emails/chats\", \"catch up the second brain\", \"run a brain sync\", \"update second brain\", or any equivalent phrasing. Paginates fully, trusts the watermark for dedup on the interior, classifies noise so it isn't summarised, and stays quiet — final summary only."
+description: "Incrementally syncs Microsoft 365 emails and Teams chats into the brain2 second brain since the last watermark, then runs dreaming (synthesis + graph connections) and a database lint. Use whenever the user asks to \"sync the brain\", \"ingest new emails/chats\", \"catch up the second brain\", \"run a brain sync\", \"update second brain\", or any equivalent phrasing. Paginates fully, trusts the watermark for dedup on the interior, classifies noise so it isn't summarised, and stays quiet — final summary only. Ingest phases run in parallel via subagents."
 ---
 
 <role>
-Sync agent. Walk three watermarks (email_done, email_sent, chat) forward to "now" with zero gaps. Be fast and quiet. Trust the watermark. Classify noise. Final summary only.
+Sync agent. Walk three watermarks (email_done, email_sent, chat) forward to "now" with zero gaps. Be fast and quiet. Trust the watermark. Classify noise. Final summary only. Ingest sources run in parallel — spawn all three subagents before waiting for any result.
 </role>
 
 <critical_rules>
@@ -13,132 +13,217 @@ Sync agent. Walk three watermarks (email_done, email_sent, chat) forward to "now
 3. **Don't fetch bodies you don't need.** The search response already returns a `summary` field. Only call `read_resource` when the item is substantive (see triage rules below).
 4. **Don't advance watermarks until verification passes.**
 5. **Quiet by default.** No phase banners, no per-item confirmations, no intermediate tables. One final summary at the end (Phase 5e). If something fails, surface that immediately — but successes are silent.
+6. **Subagent output discipline.** Each ingest subagent must output only its final JSON block — no narration, no phase banners, no progress updates.
 </critical_rules>
 
 <phases>
-1. Read watermarks
-2. Ingest (email_done → email_sent → chat) with triage
-3. Verify (re-query each source; counts match)
-4. Dream (edges + syntheses)
+1. Read watermarks + pre-fetch accounts
+2. Ingest — spawn three subagents simultaneously (email_done, email_sent, chat)
+3. Collect results — merge freq maps, validate, decide whether to proceed
+4. Dream (edges + syntheses) using merged data
 5. Lint + final report
 </phases>
 
 ---
 
-## Phase 1 — Read watermarks
+## Phase 1 — Read watermarks + pre-fetch accounts
 
-Call `brain_list_watermarks` once. Extract `last_timestamp` for `email_done`, `email_sent`, `chat`. Default to 48h ago if missing. **Do not display a table.** Move on.
+Call `brain_list_watermarks` once. Extract `last_timestamp` and `last_id` for `email_done`, `email_sent`, `chat`. Default to 48h ago if missing.
 
----
+Call `brain_list_accounts` once. Store the full result as `ACCOUNTS_JSON` — you will inject it into every subagent prompt so the subagents don't re-fetch it.
 
-## Phase 2 — Ingest
-
-For each source in order: `email_done`, `email_sent`, `chat`.
-
-### Triage rules — applied to every email BEFORE deciding whether to fetch the body
-
-Classify each search result by sender + subject. Three buckets:
-
-- **Skip body, ingest as one-line stub.** Calendar accepts/declines (subject starts with "Accepted:", "Declined:", "Tentative:"), expense approvals (Oracle workflow senders), Aha! notifications (`*aha.io`), Microsoft Engage daily digests, marketing newsletters (subscription@*, unsubscribe footers), automated build/CI mailers. Stub = subject + sender + 1-line description. No `read_resource`.
-- **Skip body, ingest with a short context line.** Personal emails (recipient = a personal address you recognise — spouse, family). Note "personal: <subject>" and move on. No `read_resource`.
-- **Fetch the body.** Everything else. Call `read_resource`, build a 3-6 sentence summary covering subject, who, key asks, action item.
-
-If you can't classify confidently, fetch — false negatives on triage cost more than the extra read.
-
-### 2a & 2b Email loops (Sent Items + Done "1. Done" folder)
-
-```
-offset = 0
-collected = []
-loop:
-    page = outlook_email_search(afterDateTime=watermark, folderName=<Sent Items| 1. Done>, limit=50, offset=offset)
-    if page is empty: break
-    collected.extend(page)
-    if len(page) < 50: break
-    offset += 50
-    if offset > 1000: split date window, recurse, dedup by id
-```
-
-
-Then for each email:
-1. Apply triage (above).
-2. **Dedup only on the first item.** If the first item's `id` matches the watermark's `last_id`, skip it. For all subsequent items, skip per-item dedup — they're guaranteed new by the watermark. (If a 23505 / unique-violation comes back from `brain_ingest_email`, log and continue — don't crash.)
-3. Build content (stub line OR full summary depending on triage).
-4. Identify account by sender domain if present in `brain_list_accounts`.
-5. Call `brain_ingest_email`. Track latest timestamp.
-
-Folder is `done` for Inbox, `sent` for Sent Items.
-
-### 2c. Chat (Teams)
-
-**`chat_message_search` is flaky — it times out intermittently but does succeed.** Always attempt it. If it times out, skip and note in the report. If it returns results, process them.
-
-```
-offset = 0
-collected = []
-loop:
-    page = chat_message_search(query="*", afterDateTime=watermark, limit=100, offset=offset)
-    if timeout/error: break (note failure, do not advance watermark)
-    if page is empty: break
-    collected.extend(page)
-    if len(page) < 100 OR moreResults == false: break
-    offset += 100
-```
-
-**Group messages by chatId** — each unique chatId is one thread. Do not ingest individual messages; ingest one note per thread using `brain_ingest_note`.
-
-**For each thread:**
-1. Collect all messages in the thread from the results (same chatId).
-2. Classify the thread:
-   - **Noise/skip**: purely logistical one-liners with no signal (e.g. "👍", "ok", "sounds good", single emoji reactions). Still count toward the watermark advance.
-   - **Substantive**: anything with content worth remembering — technical discussion, decisions, questions, customer signals, action items, shared links.
-3. For substantive threads, call `brain_ingest_note` with:
-   - `note_type`: `"note"`
-   - `title`: `"Teams Chat: <participants or topic> — <date>"`
-   - `content`: markdown summary covering who, what was discussed, key signals, action items, and verbatim snippets where they matter (e.g. a customer signal quote like "Uved is seemingly interested")
-   - If the thread is clearly about a known account, mention it in the content (no `account` field on notes, but include account name in the body for searchability).
-4. Track the latest `createdDateTime` and message `id` across all threads.
-
-**Verification:** Re-query with the original watermark. If result count >= ingested thread count, advance:
-```
-brain_set_watermark(source="chat", last_timestamp=<latest_seen>, last_id=<id of latest message>)
-```
-
-**If chat_message_search times out:** Do not advance the chat watermark. Note "Chat: skipped (timeout)" in the final report.
+**Do not display a table.** Move on.
 
 ---
 
-## Phase 3 — Verify
+## Phase 2 — Parallel Ingest
 
-For each source, re-query with the original watermark and count. Pass criteria: `verify_count >= ingested_count`. Count may be slightly higher (items arrived during run) — fine. If verify count is LOWER than ingested, something's wrong; investigate before advancing.
+**Spawn all three subagents simultaneously using the Agent tool. Launch all three before waiting for any result — a single message with three Agent tool calls.**
 
-If pass:
+Construct each subagent prompt inline, substituting the actual watermark values and `ACCOUNTS_JSON`. Each subagent handles its own pagination, triage, ingestion, verification, and watermark advance.
+
+---
+
+### Subagent A — email_done
+
 ```
-brain_set_watermark(source=..., last_timestamp=<latest_seen>, last_id=<id of latest>)
+You are an email ingestion worker. No intermediate output. Your ONLY output is the final JSON block.
+
+WATERMARK_TS={email_done.last_timestamp}
+WATERMARK_ID={email_done.last_id}
+ACCOUNTS_JSON={accounts_json}
+
+TASK:
+
+1. Fetch all emails: outlook_email_search(afterDateTime=WATERMARK_TS, folderName="1. Done", limit=50, offset=0).
+   Paginate: keep fetching (offset += 50) until page length < 50. Safety cap: offset 1000.
+
+2. For each email, apply TRIAGE (see below). Three buckets:
+   - STUB: calendar accepts/declines (subject starts "Accepted:", "Declined:", "Tentative:"), expense
+     approvals (Oracle workflow senders), Aha! notifications (*aha.io), Microsoft Engage daily
+     digests, marketing newsletters (subscription@*, unsubscribe footers), automated CI/build mailers.
+     Ingest as one-line stub (subject + sender + 1-line description). No read_resource.
+   - PERSONAL: recipient is a personal address you recognise (spouse, family). Note "personal: <subject>".
+     No read_resource.
+   - SUBSTANTIVE: everything else. Call read_resource, build a 3-6 sentence summary (subject, who,
+     key asks, action items). If you cannot classify confidently, treat as SUBSTANTIVE.
+
+3. Dedup: skip only the very first item if its id matches WATERMARK_ID. For all subsequent items,
+   skip per-item dedup — trust the watermark. If brain_ingest_email returns a unique-constraint
+   error, log the item id and continue.
+
+4. Identify account: check sender domain against ACCOUNTS_JSON. Pass account name if matched.
+
+5. Call brain_ingest_email for each item (folder="done"). Track latest timestamp and latest id seen
+   across ALL items processed (including stubs).
+
+6. VERIFY: re-query outlook_email_search with the original WATERMARK_TS, same folder. Count results.
+   If verify_count >= ingested_count: call brain_set_watermark(source="email_done",
+   last_timestamp=<latest_ts>, last_id=<latest_id>).
+   If verify_count < ingested_count: do NOT advance watermark; set status="verify_failed".
+
+7. Track: item_ids (list of IDs returned by brain_ingest_email), person_freq {name: count},
+   account_freq {account_name: count}.
+
+OUTPUT (your entire output must be only this JSON block, nothing before or after):
+{
+  "source": "email_done",
+  "status": "ok",
+  "ingested_count": 0,
+  "stub_count": 0,
+  "watermark_advanced": true,
+  "latest_timestamp": "...",
+  "latest_id": "...",
+  "item_ids": [],
+  "person_freq": {},
+  "account_freq": {},
+  "error_detail": null
+}
+status values: "ok" | "verify_failed" | "error"
 ```
 
-Don't display the verification table unless something failed.
+---
+
+### Subagent B — email_sent
+
+```
+You are an email ingestion worker. No intermediate output. Your ONLY output is the final JSON block.
+
+WATERMARK_TS={email_sent.last_timestamp}
+WATERMARK_ID={email_sent.last_id}
+ACCOUNTS_JSON={accounts_json}
+
+TASK: identical to email_done worker, with these differences:
+- folderName="Sent Items"
+- folder="sent" in brain_ingest_email calls
+- source="email_sent" in brain_set_watermark
+
+Apply the same TRIAGE rules, same pagination, same dedup, same verification logic.
+
+OUTPUT (your entire output must be only this JSON block):
+{
+  "source": "email_sent",
+  "status": "ok",
+  "ingested_count": 0,
+  "stub_count": 0,
+  "watermark_advanced": true,
+  "latest_timestamp": "...",
+  "latest_id": "...",
+  "item_ids": [],
+  "person_freq": {},
+  "account_freq": {},
+  "error_detail": null
+}
+```
+
+---
+
+### Subagent C — chat
+
+```
+You are a Teams chat ingestion worker. No intermediate output. Your ONLY output is the final JSON block.
+
+WATERMARK_TS={chat.last_timestamp}
+WATERMARK_ID={chat.last_id}
+
+TASK:
+
+1. Call chat_message_search(query="*", afterDateTime=WATERMARK_TS, limit=100, offset=0).
+   If it times out or errors: return {"source":"chat","status":"timeout","ingested_count":0,
+   "stub_count":0,"watermark_advanced":false,"latest_timestamp":null,"latest_id":null,
+   "item_ids":[],"person_freq":{},"account_freq":{},"error_detail":"timeout"}.
+
+2. Paginate to exhaustion (offset += 100 until page < 100 OR moreResults=false).
+
+3. Group all messages by chatId. Each unique chatId is one thread.
+
+4. For each thread:
+   - NOISE: purely logistical one-liners with no signal (thumbs-up reactions, "ok", "sounds good",
+     single emoji). Count toward watermark but do not ingest.
+   - SUBSTANTIVE: any technical discussion, decision, question, customer signal, action item, or
+     shared link. Call brain_ingest_note(note_type="note",
+     title="Teams Chat: <participants or topic> — <date>",
+     content="<markdown summary: who, what discussed, key signals, action items, verbatim snippets
+     where they matter>"). If the thread is about a known account, name it in the content.
+
+5. Track latest createdDateTime and latest message id across ALL threads (including noise).
+
+6. VERIFY: re-query with original WATERMARK_TS. If verify_count >= ingested_thread_count:
+   call brain_set_watermark(source="chat", last_timestamp=<latest_ts>, last_id=<latest_id>).
+
+OUTPUT (your entire output must be only this JSON block):
+{
+  "source": "chat",
+  "status": "ok",
+  "ingested_count": 0,
+  "stub_count": 0,
+  "watermark_advanced": true,
+  "latest_timestamp": "...",
+  "latest_id": "...",
+  "item_ids": [],
+  "person_freq": {},
+  "account_freq": {},
+  "error_detail": null
+}
+status values: "ok" | "verify_failed" | "error" | "timeout"
+```
+
+---
+
+## Phase 3 — Collect and Validate
+
+Wait for all three subagents to return. Parse their JSON result blocks.
+
+1. **Merge person_freq**: sum counts across all three sources.
+2. **Merge account_freq**: sum counts across all three sources.
+3. **Combine item_ids**: union of all three `item_ids` arrays.
+4. **Gate check**:
+   - If email_done or email_sent has `status != "ok"`: surface the error immediately, skip Phase 4 (dreaming), proceed to Phase 5 lint only.
+   - If chat has `status == "timeout"`: acceptable — note it, proceed to dreaming without chat's data.
+5. **Do not display Phase 3 results** — they feed Phase 4 silently.
 
 ---
 
 ## Phase 4 — Dream
 
-Only if Phase 3 passed for all three sources.
+Only if Phase 3 gate passed (both email sources ok).
 
-### 4a. Edges (only the high-signal ones)
+Use the merged `person_freq`, `account_freq`, and combined `item_ids` from Phase 3.
+
+### 4a. Edges (high-signal only)
 For each ingested item:
 - `item --about--> account` if account assigned (confidence 1.0)
 - `item --mentions--> person` for explicit @mentions and signature contacts (confidence 1.0)
 - `item --follows_up--> item` if conversation_id matches an existing item (confidence 1.0)
 
-Skip inferred edges on a normal sync — they're noise. Add them in a dedicated dreaming pass if asked.
+Skip inferred edges on a normal sync.
 
 ### 4b. Syntheses
-Run only the ones that have enough signal:
+Thresholds apply to the **merged** freq maps across all sources:
 - `weekly_digest` for the current ISO week — always.
-- `person_summary` only for people who appeared in **3+ ingested items** this run.
-- `account_health` only for accounts touched by **2+ ingested items** this run.
-- `connection_discovery` only when a concrete, non-obvious link is present — e.g. two accounts sharing the same contact unexpectedly, a person who bridges two unrelated threads, or an item that reframes an older one. Specific trigger: you can name the entities and the relationship in one sentence. Skip if you can't; don't manufacture.
+- `person_summary` only for people with merged count **3+**.
+- `account_health` only for accounts with merged count **2+**.
+- `connection_discovery` only when a concrete, non-obvious link is present — you can name the entities and relationship in one sentence. Skip if you can't; don't manufacture.
 
 Pass `source_ids` on every synthesis.
 
@@ -147,11 +232,11 @@ Pass `source_ids` on every synthesis.
 ## Phase 5 — Lint + report
 
 1. `brain_stats` — note totals.
-2. `brain_list_watermarks` — confirm advances landed (within seconds of what Phase 3 set).
+2. `brain_list_watermarks` — confirm advances landed.
 3. `brain_set_watermark(source="dreaming", last_timestamp=<now>)` — always advance after dreaming.
 4. Spot-check 3 random ingested items via `brain_check_dedup` — must all return exists.
 
-### Final report (this is the ONLY output the user sees)
+### Final report (the ONLY output the user sees)
 
 ```
 ## Brain Sync Complete
@@ -159,7 +244,7 @@ Pass `source_ids` on every synthesis.
 Ingested
 - Inbox: N (M stubbed as noise)
 - Sent: N (M stubbed)
-- Chat: skipped (M365 chat search unavailable) | N threads
+- Chat: skipped (timeout) | N threads
 
 Dreaming
 - Edges: N
@@ -181,17 +266,18 @@ Lint: ✅ | issues: <list>
 - **Watermark advanced before verify**: never. Verify first.
 - **Body fetch on noise**: triage first. A daily digest doesn't need a 3000-token body.
 - **Per-item dedup on the interior**: don't. Trust the watermark; rely on DB unique constraint as a backstop.
-- **Loud narration**: phase banners and per-item confirmations make a sync feel like it's grinding. Stay silent until the final report.
+- **Subagent narration**: subagents must output only their JSON block. No banners, no progress updates.
 - **Manufactured syntheses**: skip syntheses without enough signal rather than padding the run.
-- **Chat: ingesting individual messages**: never. One `brain_ingest_note` per thread, not per message.
-- **Chat: skipping on first timeout**: always attempt `chat_message_search`. It succeeds more often than not. Only skip if it errors/times out.
+- **Chat: ingesting individual messages**: never. One brain_ingest_note per thread.
+- **Chat: skipping on first timeout**: always attempt chat_message_search. Only skip if it errors/times out.
+- **Sequential subagent launch**: all three Agent tool calls must be in a single message. Do not wait for one to finish before spawning the next.
 </failure_modes>
 
 <output_style>
-- No phase banners ("**Phase 2 — Ingesting…**"). Internal only.
-- No tables for watermarks read or counts in progress. The final report is the only structured output.
+- No phase banners. No tables for watermarks read or counts in progress.
+- The final report is the only structured output.
 - If a tool fails, surface it immediately and concisely. Successes are silent.
 - If interrupted, summarise where you stopped and which watermarks are/aren't advanced.
 </output_style>
 
-Version 2.1 — updated 2026-05-15. Chat (Phase 2c) now actively attempted: groups messages by chatId, ingests one `brain_ingest_note` per substantive thread, advances the chat watermark on success. Previous v2.0 skipped chat entirely due to perceived timeout reliability — empirically it works, so now it runs.
+Version 3.0 — updated 2026-05-21. Phases 2–3 restructured: email_done, email_sent, and chat ingest workers now run as parallel subagents (Agent tool), reducing wall-clock time ~40–45%. Each subagent owns its own verify and watermark advance; main agent collects JSON results and merges freq maps before dreaming.

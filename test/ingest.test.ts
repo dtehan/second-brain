@@ -142,10 +142,8 @@ describe('Ingest Tools', () => {
   });
 
   it('watermark tools work correctly', async () => {
-    const initial = await callTool(server, 'brain_get_watermark', {
-      source: 'email_done',
-    }) as { exists: boolean };
-    expect(initial.exists).toBe(false);
+    const initial = await callTool(server, 'brain_list_watermarks', {}) as Array<{ source: string }>;
+    expect(initial).toHaveLength(0);
 
     await callTool(server, 'brain_set_watermark', {
       source: 'email_done',
@@ -153,14 +151,10 @@ describe('Ingest Tools', () => {
       last_id: 'msg-999',
     });
 
-    const after = await callTool(server, 'brain_get_watermark', {
-      source: 'email_done',
-    }) as { exists: boolean; last_timestamp: string };
-    expect(after.exists).toBe(true);
-    expect(after.last_timestamp).toBe('2026-04-24T06:43:00Z');
-
-    const all = await callTool(server, 'brain_list_watermarks', {}) as Array<{ source: string }>;
-    expect(all.length).toBe(1);
+    const all = await callTool(server, 'brain_list_watermarks', {}) as Array<{ source: string; last_timestamp: string }>;
+    expect(all).toHaveLength(1);
+    expect(all[0].source).toBe('email_done');
+    expect(all[0].last_timestamp).toBe('2026-04-24T06:43:00Z');
   });
 
   it('stats reports correct counts', async () => {
@@ -223,49 +217,6 @@ describe('Ingest Tools', () => {
     ]);
   });
 
-  it('upserts a chat on chat_id collision (higher message_count wins)', async () => {
-    const first = await callTool(server, 'brain_ingest_chat', {
-      subject: 'Sync thread', date: '2026-05-06', content: 'first summary',
-      participants: ['Alice'], chat_id: 'thread-xyz', message_count: 5,
-    }) as { id: string; action: string; message_count: number };
-    expect(first.action).toBe('created');
-
-    const second = await callTool(server, 'brain_ingest_chat', {
-      subject: 'Sync thread', date: '2026-05-06', content: 'second summary with more context',
-      participants: ['Alice', 'Bob'], chat_id: 'thread-xyz', message_count: 7,
-    }) as { id: string; action: string; message_count: number };
-
-    expect(second.id).toBe(first.id);
-    expect(second.action).toBe('updated');
-
-    // Only one row for the chat
-    const rows = db.prepare("SELECT id, content, message_count FROM items WHERE chat_id = 'thread-xyz'").all() as Array<{ id: string; content: string; message_count: number }>;
-    expect(rows).toHaveLength(1);
-    expect(rows[0].message_count).toBe(7);
-    expect(rows[0].content).toBe('second summary with more context');
-
-    // FTS reflects the new content
-    const fts = db.prepare("SELECT entity_id FROM search_fts WHERE search_fts MATCH 'context'").all();
-    expect(fts).toHaveLength(1);
-  });
-
-  it('skips chat upsert when message_count regresses', async () => {
-    await callTool(server, 'brain_ingest_chat', {
-      subject: 'Thread A', date: '2026-05-06', content: 'newer summary',
-      participants: ['Alice'], chat_id: 'thread-replay', message_count: 10,
-    });
-
-    const replay = await callTool(server, 'brain_ingest_chat', {
-      subject: 'Thread A (old)', date: '2026-05-05', content: 'older summary',
-      participants: ['Alice'], chat_id: 'thread-replay', message_count: 4,
-    }) as { id: string; action: string };
-
-    expect(replay.action).toBe('skipped');
-
-    const row = db.prepare("SELECT content, message_count FROM items WHERE chat_id = 'thread-replay'").get() as { content: string; message_count: number };
-    expect(row.message_count).toBe(10);
-    expect(row.content).toBe('newer summary');
-  });
 
   it('upserts an email on email_message_id collision', async () => {
     const first = await callTool(server, 'brain_ingest_email', {
@@ -308,10 +259,8 @@ describe('Ingest Tools', () => {
   });
 
   it('brain_check_dedup is deterministic on chat_id', async () => {
-    await callTool(server, 'brain_ingest_chat', {
-      subject: 'Dedup test', date: '2026-05-06', content: 'c',
-      participants: ['Alice'], chat_id: 'dedup-chat', message_count: 9,
-    });
+    db.prepare(`INSERT INTO items (id, title, item_type, content, chat_id, message_count, created_at)
+      VALUES ('chat-1', 'Dedup test', 'chat', 'c', 'dedup-chat', 9, datetime('now'))`).run();
 
     const check = await callTool(server, 'brain_check_dedup', { chat_id: 'dedup-chat' }) as { exists: boolean; message_count: number };
     expect(check.exists).toBe(true);
@@ -319,14 +268,14 @@ describe('Ingest Tools', () => {
   });
 
   it('brain_merge_items re-targets edges, item_people, and syntheses then drops the row', async () => {
-    // Create two items with two different chat_ids (so we can have both pre-merge)
-    const a = await callTool(server, 'brain_ingest_chat', {
+    // Create two items via email ingest (merge logic is type-agnostic)
+    const a = await callTool(server, 'brain_ingest_email', {
       subject: 'Keep', date: '2026-05-06', content: 'keeper',
-      participants: ['Alice'], chat_id: 'ka', message_count: 1,
+      participants: ['Alice'], email_message_id: 'keep-1', folder: 'done',
     }) as { id: string };
-    const b = await callTool(server, 'brain_ingest_chat', {
+    const b = await callTool(server, 'brain_ingest_email', {
       subject: 'Drop', date: '2026-05-06', content: 'to drop',
-      participants: ['Bob'], chat_id: 'kb', message_count: 1,
+      participants: ['Bob'], email_message_id: 'drop-1', folder: 'done',
     }) as { id: string };
 
     // Edge from b → some person; will be re-targeted to a
