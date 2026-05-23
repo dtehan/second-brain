@@ -28,7 +28,14 @@ Sync agent. Walk three watermarks (email_done, email_sent, chat) forward to "now
 
 ## Phase 1 — Read watermarks + pre-fetch accounts
 
-Call `brain_list_watermarks` once. Extract `last_timestamp` and `last_id` for `email_done`, `email_sent`, `chat`. Default to 48h ago if missing.
+Call `brain_list_watermarks` once. Extract:
+- `last_timestamp` and `last_id` for `email_done`, `email_sent`, `chat` — default to 48h ago if missing.
+- `last_timestamp` for `weekly_digest`, `person_summary`, `account_health` — default to null if missing.
+
+Compute now (ISO datetime). Derive three boolean flags:
+- `DIGEST_DUE` = `weekly_digest` watermark is null OR now − last_timestamp ≥ 7 days
+- `PERSON_DUE` = `person_summary` watermark is null OR now − last_timestamp ≥ 7 days
+- `ACCOUNT_DUE` = `account_health` watermark is null OR now − last_timestamp ≥ 7 days
 
 Call `brain_list_accounts` once. Store the full result as `ACCOUNTS_JSON` — you will inject it into every subagent prompt so the subagents don't re-fetch it.
 
@@ -219,13 +226,32 @@ For each ingested item:
 Skip inferred edges on a normal sync.
 
 ### 4b. Syntheses
-Thresholds apply to the **merged** freq maps across all sources:
-- `weekly_digest` for the current ISO week — always.
-- `person_summary` only for people with merged count **3+**.
-- `account_health` only for accounts with merged count **2+**.
-- `connection_discovery` only when a concrete, non-obvious link is present — you can name the entities and relationship in one sentence. Skip if you can't; don't manufacture.
 
-Pass `source_ids` on every synthesis.
+All three synthesis types are gated by 7-day watermarks set in Phase 1. When a type is due, backfill from the DB (not just this sync's items) so the synthesis covers the full period since the last run. Pass `source_ids` on every synthesis.
+
+**`weekly_digest`** — only if `DIGEST_DUE`.
+- Derive `digest_from` = `weekly_digest` watermark date (or 7 days ago if null). Derive `digest_to` = today.
+- Call `brain_list_items(date_from=digest_from, date_to=digest_to, limit=200)` to retrieve all items in the window.
+- Write a digest covering that full window (not just this sync's batch).
+- Scope: `<digest_from>_<digest_to>` (e.g. `2026-05-16_2026-05-23`).
+- After saving: `brain_set_watermark(source="weekly_digest", last_timestamp=<now>)`.
+- If not due: skip. Note days until next in final report.
+
+**`person_summary`** — only if `PERSON_DUE`.
+- For each person with merged count **1+** in this sync's `person_freq`:
+  - Call `brain_get_person(name)` to get their full interaction history from the DB.
+  - Write a summary covering all available history (not just this sync).
+- After saving all person summaries: `brain_set_watermark(source="person_summary", last_timestamp=<now>)`.
+- If not due: skip.
+
+**`account_health`** — only if `ACCOUNT_DUE`.
+- For each account with merged count **1+** in this sync's `account_freq`:
+  - Call `brain_get_account(name)` to get their full engagement history from the DB.
+  - Write a health snapshot covering all available history (not just this sync).
+- After saving all account health snapshots: `brain_set_watermark(source="account_health", last_timestamp=<now>)`.
+- If not due: skip.
+
+**`connection_discovery`** — always eligible (no watermark gate). Only generate when a concrete, non-obvious link is present — you can name the entities and relationship in one sentence. Skip if you can't; don't manufacture.
 
 ---
 
@@ -248,12 +274,18 @@ Ingested
 
 Dreaming
 - Edges: N
-- Syntheses: weekly_digest + N person summaries + N account health + (connection_discovery | none)
+- weekly_digest: generated (covers <from> → <to>) | skipped (next in N days)
+- person_summary: N generated | skipped (next in N days)
+- account_health: N generated | skipped (next in N days)
+- connection_discovery: generated | none
 
 Watermarks
 - email_done → <ts>
 - email_sent → <ts>
 - chat → <ts>
+- weekly_digest → <ts> | unchanged
+- person_summary → <ts> | unchanged
+- account_health → <ts> | unchanged
 - dreaming → <ts>
 
 Lint: ✅ | issues: <list>
@@ -280,4 +312,4 @@ Lint: ✅ | issues: <list>
 - If interrupted, summarise where you stopped and which watermarks are/aren't advanced.
 </output_style>
 
-Version 3.0 — updated 2026-05-21. Phases 2–3 restructured: email_done, email_sent, and chat ingest workers now run as parallel subagents (Agent tool), reducing wall-clock time ~40–45%. Each subagent owns its own verify and watermark advance; main agent collects JSON results and merges freq maps before dreaming.
+Version 3.1 — updated 2026-05-23. Phase 1 now reads weekly_digest, person_summary, and account_health watermarks and derives DIGEST_DUE / PERSON_DUE / ACCOUNT_DUE flags. Phase 4b gates all three synthesis types on a 7-day cadence; when due, each backfills from the DB (brain_list_items / brain_get_person / brain_get_account) rather than relying solely on the current sync's items. Per-entity thresholds lowered to 1+ (the 7-day gate is now the rate limiter). Scope for weekly_digest changed from ISO week to date-range string.
