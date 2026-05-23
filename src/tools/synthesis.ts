@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { generateId } from '../utils/ids.js';
+import { updateSearchIndex, updateVectorIndex } from '../search/update.js';
 
 export function registerSynthesisTools(server: McpServer, db: Database.Database): void {
 
@@ -35,7 +36,14 @@ export function registerSynthesisTools(server: McpServer, db: Database.Database)
 
       if (previous) {
         db.prepare('UPDATE syntheses SET superseded_by = ? WHERE id = ?').run(id, previous.id);
+        // Remove superseded synthesis from search indexes
+        db.prepare('DELETE FROM search_fts WHERE entity_id = ?').run(previous.id);
+        db.prepare('DELETE FROM search_vec WHERE entity_id = ?').run(previous.id);
+        db.prepare('DELETE FROM search_meta WHERE entity_id = ?').run(previous.id);
       }
+
+      updateSearchIndex(db, id, 'synthesis', title, content, null, [synthesis_type]);
+      await updateVectorIndex(db, id, `${title}\n\n${content}`);
 
       return { content: [{ type: 'text' as const, text: JSON.stringify({ id, synthesis_type, scope, supersedes: previous?.id }) }] };
     }

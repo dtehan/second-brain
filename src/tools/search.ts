@@ -10,7 +10,7 @@ export function registerSearchTools(server: McpServer, db: Database.Database): v
     'Hybrid semantic + full-text search across all entities. Returns ranked results combining keyword matches and meaning similarity.',
     {
       query: z.string().describe('Search query (natural language or keywords)'),
-      type_filter: z.enum(['item', 'person', 'account', 'project', 'idea', 'resource']).optional().describe('Filter by entity type'),
+      type_filter: z.enum(['item', 'person', 'account', 'project', 'idea', 'resource', 'synthesis']).optional().describe('Filter by entity type'),
       date_from: z.string().optional().describe('Filter items from this date (YYYY-MM-DD)'),
       date_to: z.string().optional().describe('Filter items up to this date (YYYY-MM-DD)'),
       limit: z.number().optional().default(20).describe('Max results to return'),
