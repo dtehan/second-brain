@@ -1,14 +1,14 @@
 ---
 name: brain-sync
-description: "Incrementally syncs Microsoft 365 emails and Teams chats into the brain2 second brain since the last watermark, then runs dreaming (synthesis + graph connections) and a database lint. Use whenever the user asks to \"sync the brain\", \"ingest new emails/chats\", \"catch up the second brain\", \"run a brain sync\", \"update second brain\", or any equivalent phrasing. Paginates fully, trusts the watermark for dedup on the interior, classifies noise so it isn't summarised, and stays quiet — final summary only. Ingest phases run in parallel via subagents."
+description: "Incrementally syncs Microsoft 365 emails into the brain2 second brain since the last watermark, then runs dreaming (synthesis + graph connections) and a database lint. Use whenever the user asks to \"sync the brain\", \"ingest new emails\", \"catch up the second brain\", \"run a brain sync\", \"update second brain\", or any equivalent phrasing. Paginates fully, trusts the watermark for dedup on the interior, classifies noise so it isn't summarised, and stays quiet — final summary only. Ingest phases run in parallel via subagents."
 ---
 
 <role>
-Sync agent. Walk three watermarks (email_done, email_sent, chat) forward to "now" with zero gaps. Be fast and quiet. Trust the watermark. Classify noise. Final summary only. Ingest sources run in parallel — spawn all three subagents before waiting for any result.
+Sync agent. Walk two watermarks (email_done, email_sent) forward to "now" with zero gaps. Be fast and quiet. Trust the watermark. Classify noise. Final summary only. Ingest sources run in parallel — spawn two subagents before waiting for any result.
 </role>
 
 <critical_rules>
-1. **Paginate to exhaustion.** Set `limit` to the max (50 Outlook, 100 Teams) and keep paging until a page is shorter than `limit` OR `moreResults: false`. Never stop early.
+1. **Paginate to exhaustion.** Set `limit` to the max (50 Outlook) and keep paging until a page is shorter than `limit` OR `moreResults: false`. Never stop early.
 2. **Watermark trust + boundary dedup.** Dedup-check only the FIRST item per source (the boundary). Items strictly newer than the watermark are new — skip per-item dedup. The DB unique constraint on message_id is the safety net if you're wrong.
 3. **Don't fetch bodies you don't need.** The search response already returns a `summary` field. Only call `read_resource` when the item is substantive (see triage rules below).
 4. **Don't advance watermarks until verification passes.**
@@ -18,7 +18,7 @@ Sync agent. Walk three watermarks (email_done, email_sent, chat) forward to "now
 
 <phases>
 1. Read watermarks + pre-fetch accounts
-2. Ingest — spawn three subagents simultaneously (email_done, email_sent, chat)
+2. Ingest — spawn two subagents simultaneously (email_done, email_sent)
 3. Collect results — merge freq maps, validate, decide whether to proceed
 4. Dream (edges + syntheses) using merged data
 5. Lint + final report
@@ -29,13 +29,13 @@ Sync agent. Walk three watermarks (email_done, email_sent, chat) forward to "now
 ## Phase 1 — Read watermarks + pre-fetch accounts
 
 Call `brain_list_watermarks` once. Extract:
-- `last_timestamp` and `last_id` for `email_done`, `email_sent`, `chat` — default to 48h ago if missing.
-- `last_timestamp` for `weekly_digest`, `person_summary`, `account_health` — default to null if missing.
+- `last_timestamp` and `last_id` for `email_done`, `email_sent` — default to 48h ago if missing.
+- `last_timestamp` for `monthly_digest`, `person_summary`, `account_health` — default to null if missing.
 
 Compute now (ISO datetime). Derive three boolean flags:
-- `DIGEST_DUE` = `weekly_digest` watermark is null OR now − last_timestamp ≥ 7 days
-- `PERSON_DUE` = `person_summary` watermark is null OR now − last_timestamp ≥ 7 days
-- `ACCOUNT_DUE` = `account_health` watermark is null OR now − last_timestamp ≥ 7 days
+- `DIGEST_DUE` = `monthly_digest` watermark is null OR now − last_timestamp ≥ 30 days
+- `PERSON_DUE` = `person_summary` watermark is null OR now − last_timestamp ≥ 30 days
+- `ACCOUNT_DUE` = `account_health` watermark is null OR now − last_timestamp ≥ 30 days
 
 Call `brain_list_accounts` once. Store the full result as `ACCOUNTS_JSON` — you will inject it into every subagent prompt so the subagents don't re-fetch it.
 
@@ -45,7 +45,7 @@ Call `brain_list_accounts` once. Store the full result as `ACCOUNTS_JSON` — yo
 
 ## Phase 2 — Parallel Ingest
 
-**Spawn all three subagents simultaneously using the Agent tool. Launch all three before waiting for any result — a single message with three Agent tool calls.**
+**Spawn both subagents simultaneously using the Agent tool. Launch both before waiting for any result — a single message with two Agent tool calls.**
 
 Construct each subagent prompt inline, substituting the actual watermark values and `ACCOUNTS_JSON`. Each subagent handles its own pagination, triage, ingestion, verification, and watermark advance.
 
@@ -145,68 +145,15 @@ OUTPUT (your entire output must be only this JSON block):
 
 ---
 
-### Subagent C — chat
-
-```
-You are a Teams chat ingestion worker. No intermediate output. Your ONLY output is the final JSON block.
-
-WATERMARK_TS={chat.last_timestamp}
-WATERMARK_ID={chat.last_id}
-
-TASK:
-
-1. Call chat_message_search(query="*", afterDateTime=WATERMARK_TS, limit=100, offset=0).
-   If it times out or errors: return {"source":"chat","status":"timeout","ingested_count":0,
-   "stub_count":0,"watermark_advanced":false,"latest_timestamp":null,"latest_id":null,
-   "item_ids":[],"person_freq":{},"account_freq":{},"error_detail":"timeout"}.
-
-2. Paginate to exhaustion (offset += 100 until page < 100 OR moreResults=false).
-
-3. Group all messages by chatId. Each unique chatId is one thread.
-
-4. For each thread:
-   - NOISE: purely logistical one-liners with no signal (thumbs-up reactions, "ok", "sounds good",
-     single emoji). Count toward watermark but do not ingest.
-   - SUBSTANTIVE: any technical discussion, decision, question, customer signal, action item, or
-     shared link. Call brain_ingest_note(note_type="note",
-     title="Teams Chat: <participants or topic> — <date>",
-     content="<markdown summary: who, what discussed, key signals, action items, verbatim snippets
-     where they matter>"). If the thread is about a known account, name it in the content.
-
-5. Track latest createdDateTime and latest message id across ALL threads (including noise).
-
-6. VERIFY: re-query with original WATERMARK_TS. If verify_count >= ingested_thread_count:
-   call brain_set_watermark(source="chat", last_timestamp=<latest_ts>, last_id=<latest_id>).
-
-OUTPUT (your entire output must be only this JSON block):
-{
-  "source": "chat",
-  "status": "ok",
-  "ingested_count": 0,
-  "stub_count": 0,
-  "watermark_advanced": true,
-  "latest_timestamp": "...",
-  "latest_id": "...",
-  "item_ids": [],
-  "person_freq": {},
-  "account_freq": {},
-  "error_detail": null
-}
-status values: "ok" | "verify_failed" | "error" | "timeout"
-```
-
----
-
 ## Phase 3 — Collect and Validate
 
-Wait for all three subagents to return. Parse their JSON result blocks.
+Wait for both subagents to return. Parse their JSON result blocks.
 
-1. **Merge person_freq**: sum counts across all three sources.
-2. **Merge account_freq**: sum counts across all three sources.
-3. **Combine item_ids**: union of all three `item_ids` arrays.
+1. **Merge person_freq**: sum counts across both sources.
+2. **Merge account_freq**: sum counts across both sources.
+3. **Combine item_ids**: union of both `item_ids` arrays.
 4. **Gate check**:
    - If email_done or email_sent has `status != "ok"`: surface the error immediately, skip Phase 4 (dreaming), proceed to Phase 5 lint only.
-   - If chat has `status == "timeout"`: acceptable — note it, proceed to dreaming without chat's data.
 5. **Do not display Phase 3 results** — they feed Phase 4 silently.
 
 ---
@@ -227,14 +174,14 @@ Skip inferred edges on a normal sync.
 
 ### 4b. Syntheses
 
-All three synthesis types are gated by 7-day watermarks set in Phase 1. When a type is due, backfill from the DB (not just this sync's items) so the synthesis covers the full period since the last run. Pass `source_ids` on every synthesis.
+All three synthesis types are gated by 30-day watermarks set in Phase 1. When a type is due, backfill from the DB (not just this sync's items) so the synthesis covers the full period since the last run. Pass `source_ids` on every synthesis.
 
-**`weekly_digest`** — only if `DIGEST_DUE`.
-- Derive `digest_from` = `weekly_digest` watermark date (or 7 days ago if null). Derive `digest_to` = today.
+**`monthly_digest`** — only if `DIGEST_DUE`.
+- Derive `digest_from` = `monthly_digest` watermark date (or 30 days ago if null). Derive `digest_to` = today.
 - Call `brain_list_items(date_from=digest_from, date_to=digest_to, limit=200)` to retrieve all items in the window.
 - Write a digest covering that full window (not just this sync's batch).
-- Scope: `<digest_from>_<digest_to>` (e.g. `2026-05-16_2026-05-23`).
-- After saving: `brain_set_watermark(source="weekly_digest", last_timestamp=<now>)`.
+- Scope: `<digest_from>_<digest_to>` (e.g. `2026-05-16_2026-06-16`).
+- After saving: `brain_set_watermark(source="monthly_digest", last_timestamp=<now>)`.
 - If not due: skip. Note days until next in final report.
 
 **`person_summary`** — only if `PERSON_DUE`.
@@ -242,14 +189,14 @@ All three synthesis types are gated by 7-day watermarks set in Phase 1. When a t
   - Call `brain_get_person(name)` to get their full interaction history from the DB.
   - Write a summary covering all available history (not just this sync).
 - After saving all person summaries: `brain_set_watermark(source="person_summary", last_timestamp=<now>)`.
-- If not due: skip.
+- If not due: skip. Note days until next in final report.
 
 **`account_health`** — only if `ACCOUNT_DUE`.
 - For each account with merged count **1+** in this sync's `account_freq`:
   - Call `brain_get_account(name)` to get their full engagement history from the DB.
   - Write a health snapshot covering all available history (not just this sync).
 - After saving all account health snapshots: `brain_set_watermark(source="account_health", last_timestamp=<now>)`.
-- If not due: skip.
+- If not due: skip. Note days until next in final report.
 
 **`connection_discovery`** — always eligible (no watermark gate). Only generate when a concrete, non-obvious link is present — you can name the entities and relationship in one sentence. Skip if you can't; don't manufacture.
 
@@ -270,11 +217,10 @@ All three synthesis types are gated by 7-day watermarks set in Phase 1. When a t
 Ingested
 - Inbox: N (M stubbed as noise)
 - Sent: N (M stubbed)
-- Chat: skipped (timeout) | N threads
 
 Dreaming
 - Edges: N
-- weekly_digest: generated (covers <from> → <to>) | skipped (next in N days)
+- monthly_digest: generated (covers <from> → <to>) | skipped (next in N days)
 - person_summary: N generated | skipped (next in N days)
 - account_health: N generated | skipped (next in N days)
 - connection_discovery: generated | none
@@ -282,8 +228,7 @@ Dreaming
 Watermarks
 - email_done → <ts>
 - email_sent → <ts>
-- chat → <ts>
-- weekly_digest → <ts> | unchanged
+- monthly_digest → <ts> | unchanged
 - person_summary → <ts> | unchanged
 - account_health → <ts> | unchanged
 - dreaming → <ts>
@@ -300,9 +245,7 @@ Lint: ✅ | issues: <list>
 - **Per-item dedup on the interior**: don't. Trust the watermark; rely on DB unique constraint as a backstop.
 - **Subagent narration**: subagents must output only their JSON block. No banners, no progress updates.
 - **Manufactured syntheses**: skip syntheses without enough signal rather than padding the run.
-- **Chat: ingesting individual messages**: never. One brain_ingest_note per thread.
-- **Chat: skipping on first timeout**: always attempt chat_message_search. Only skip if it errors/times out.
-- **Sequential subagent launch**: all three Agent tool calls must be in a single message. Do not wait for one to finish before spawning the next.
+- **Sequential subagent launch**: both Agent tool calls must be in a single message. Do not wait for one to finish before spawning the next.
 </failure_modes>
 
 <output_style>
@@ -312,4 +255,4 @@ Lint: ✅ | issues: <list>
 - If interrupted, summarise where you stopped and which watermarks are/aren't advanced.
 </output_style>
 
-Version 3.1 — updated 2026-05-23. Phase 1 now reads weekly_digest, person_summary, and account_health watermarks and derives DIGEST_DUE / PERSON_DUE / ACCOUNT_DUE flags. Phase 4b gates all three synthesis types on a 7-day cadence; when due, each backfills from the DB (brain_list_items / brain_get_person / brain_get_account) rather than relying solely on the current sync's items. Per-entity thresholds lowered to 1+ (the 7-day gate is now the rate limiter). Scope for weekly_digest changed from ISO week to date-range string.
+Version 3.2 — updated 2026-07-07. Removed chat ingestion entirely (subagent C). Changed digest and synthesis gates from 7-day to 30-day cadence. Renamed weekly_digest to monthly_digest. Phase 2 now spawns two subagents (email only) instead of three.
